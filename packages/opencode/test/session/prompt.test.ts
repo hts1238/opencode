@@ -546,6 +546,72 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
   }),
 )
 
+it.instance("loop auto-compacts after the output limit truncates a response", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, sessions, chat } = yield* boot()
+    yield* user(chat.id, "make the change")
+    yield* llm.push(
+      reply()
+        .pendingTool("apply_patch", {
+          patchText: "*** Begin Patch\n*** Add File: example.txt\n+example\n*** End Patch",
+        })
+        .length(),
+      reply().text("compacted summary").stop(),
+      reply().text("finished after compaction").stop(),
+    )
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(yield* llm.calls).toBe(3)
+    expect(yield* llm.pending).toBe(0)
+    expect(result.parts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "text", text: "finished after compaction" })]),
+    )
+    expect(
+      messages.flatMap((message) => message.parts).filter((part) => part.type === "compaction" && part.auto === true),
+    ).toHaveLength(1)
+  }),
+)
+
+it.instance("loop recovers a persisted length response with an interrupted tool call", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    const seeded = yield* seed(chat.id, { finish: "length" })
+    yield* sessions.updatePart({
+      id: PartID.ascending(),
+      messageID: seeded.assistant.id,
+      sessionID: chat.id,
+      type: "tool",
+      callID: "truncated-call",
+      tool: "apply_patch",
+      state: {
+        status: "error",
+        input: {},
+        error: "Tool execution aborted",
+        metadata: { interrupted: true },
+        time: { start: 1, end: 2 },
+      },
+    })
+    yield* llm.text("compacted summary")
+    yield* llm.text("finished after recovery")
+
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const messages = yield* sessions.messages({ sessionID: chat.id })
+
+    expect(result.parts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "text", text: "finished after recovery" })]),
+    )
+    expect(
+      messages.flatMap((message) => message.parts).filter((part) => part.type === "compaction" && part.auto === true),
+    ).toHaveLength(1)
+  }),
+)
+
 it.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

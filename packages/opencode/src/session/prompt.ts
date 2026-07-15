@@ -1109,6 +1109,22 @@ const layer = Layer.effect(
             ) ?? false
 
           if (
+            lastAssistant?.finish === "length" &&
+            !lastAssistant.error &&
+            !lastAssistant.summary &&
+            lastUser.format?.type !== "json_schema" &&
+            lastUser.time.created <= lastAssistant.time.created &&
+            (yield* config.get()).compaction?.auto !== false
+          ) {
+            yield* Effect.logWarning("auto-compacting truncated response", {
+              "session.id": sessionID,
+              messageID: lastAssistant.id,
+            })
+            yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+            continue
+          }
+
+          if (
             lastAssistant?.finish &&
             !["tool-calls"].includes(lastAssistant.finish) &&
             !hasToolCalls &&
@@ -1344,8 +1360,8 @@ const layer = Layer.effect(
 
             if (result === "stop") return "break" as const
             if (result === "compact") {
-              // Final answers should settle immediately; the next user turn will compact before running if needed.
-              if (finished) return "break" as const
+              // A length finish is incomplete; other final answers can settle until the next user turn.
+              if (finished && handle.message.finish !== "length") return "break" as const
               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,

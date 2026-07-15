@@ -490,9 +490,11 @@ const layer = Layer.effect(
                 messageID: ctx.assistantMessage.parentID,
               })
               .pipe(Effect.ignore, Effect.forkIn(scope))
+            const cfg = yield* config.get()
             if (
               !ctx.assistantMessage.summary &&
-              isOverflow({ cfg: yield* config.get(), tokens: usage.tokens, model: ctx.model })
+              cfg.compaction?.auto !== false &&
+              (value.reason === "length" || isOverflow({ cfg, tokens: usage.tokens, model: ctx.model }))
             ) {
               ctx.needsCompaction = true
             }
