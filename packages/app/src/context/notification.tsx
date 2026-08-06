@@ -1,6 +1,6 @@
 import { createStore, reconcile } from "solid-js/store"
-import { type Accessor, batch, createEffect, createMemo, createRoot, getOwner, onCleanup } from "solid-js"
-import { useParams, useSearchParams } from "@solidjs/router"
+import { type Accessor, batch, createEffect, createMemo, createRoot, getOwner, onCleanup, onMount } from "solid-js"
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import type { ServerSDK } from "./server-sdk"
 import type { ServerSync } from "./server-sync"
@@ -17,6 +17,8 @@ import { ServerConnection, useServer } from "./server"
 import { type DraftTab, useTabs } from "./tabs"
 import { requireServerKey } from "@/utils/session-route"
 import type { ServerScope } from "@/utils/server-scope"
+import { NOTIFICATION_OPEN_EVENT, type NotificationOpenDetail } from "@/utils/notification-click"
+import { shouldSuppressPageNotification } from "./notification-policy"
 
 type NotificationBase = {
   directory?: string
@@ -118,11 +120,22 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     const global = useGlobal()
     const server = useServer()
     const tabs = useTabs()
+    const navigate = useNavigate()
     const platform = usePlatform()
     const settings = useSettings()
     const language = useLanguage()
     const owner = getOwner()
     const states = new Map<ServerScope, { dispose: () => void; state: NotificationState }>()
+
+    onMount(() => {
+      const onNotificationOpen = (event: Event) => {
+        const href = (event as CustomEvent<NotificationOpenDetail>).detail?.href
+        if (!href?.startsWith("/") || href.startsWith("//")) return
+        navigate(href)
+      }
+      window.addEventListener(NOTIFICATION_OPEN_EVENT, onNotificationOpen)
+      onCleanup(() => window.removeEventListener(NOTIFICATION_OPEN_EVENT, onNotificationOpen))
+    })
 
     const activeServer = createMemo(() => {
       if (params.serverKey) return requireServerKey(params.serverKey)
@@ -153,6 +166,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
             platform,
             settings,
             language,
+            navigate,
           }),
         }),
         owner ?? undefined,
@@ -176,7 +190,14 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
 
     onCleanup(() => states.forEach((value) => value.dispose()))
 
-    const selected = () => ensure(activeServer())
+    const selected = () => {
+      const list = global.servers.list()
+      const key = activeServer()
+      if (list.some((conn) => ServerConnection.key(conn) === key)) return ensure(key)
+      const conn = list.find((conn) => ServerConnection.key(conn) === server.key) ?? list[0]
+      if (!conn) throw new Error("Notification server not found")
+      return ensure(ServerConnection.key(conn))
+    }
 
     return {
       ready: () => selected().ready(),
@@ -210,6 +231,7 @@ function createServerNotificationState(input: {
   platform: ReturnType<typeof usePlatform>
   settings: ReturnType<typeof useSettings>
   language: ReturnType<typeof useLanguage>
+  navigate: (href: string) => void
 }) {
   const serverSDK = () => input.sdk
   const serverSync = () => input.sync
@@ -325,14 +347,38 @@ function createServerNotificationState(input: {
     return sessionID === activeSession
   }
 
+  const suppressPageNotification = async () => {
+    const supportsPush =
+      platform.platform === "web" &&
+      typeof window === "object" &&
+      "Notification" in window &&
+      "PushManager" in window &&
+      "serviceWorker" in navigator
+    const subscription = supportsPush
+      ? await navigator.serviceWorker
+          .getRegistration()
+          .then((registration) => registration?.pushManager.getSubscription())
+          .catch(() => undefined)
+      : undefined
+    return shouldSuppressPageNotification({
+      focused: typeof document === "object" ? document.hasFocus() : true,
+      permission: supportsPush ? Notification.permission : "unsupported",
+      subscribed: !!subscription,
+      supportsPush,
+      visible: typeof document === "object" ? document.visibilityState === "visible" : true,
+    })
+  }
+
   const handleSessionIdle = (directory: string, event: { properties: { sessionID?: string } }, time: number) => {
     const sessionID = event.properties.sessionID
-    void lookup(directory, sessionID).then((session) => {
+    void lookup(directory, sessionID).then(async (session) => {
       if (meta.disposed) return
       if (!session) return
       if (session.parentID) return
+      const suppress = await suppressPageNotification()
+      if (meta.disposed) return
 
-      if (settings.sounds.agentEnabled()) {
+      if (!suppress && settings.sounds.agentEnabled()) {
         void playSoundById(settings.sounds.agent())
       }
 
@@ -345,8 +391,10 @@ function createServerNotificationState(input: {
       })
 
       const href = `/${base64Encode(directory)}/session/${sessionID}`
-      if (settings.notifications.agent()) {
-        void platform.notify(language.t("notification.session.responseReady.title"), session.title ?? sessionID, href)
+      if (!suppress && settings.notifications.agent()) {
+        void platform.notify(language.t("notification.session.responseReady.title"), session.title ?? sessionID, () =>
+          input.navigate(href),
+        )
       }
     })
   }
@@ -357,11 +405,13 @@ function createServerNotificationState(input: {
     time: number,
   ) => {
     const sessionID = event.properties.sessionID
-    void lookup(directory, sessionID).then((session) => {
+    void lookup(directory, sessionID).then(async (session) => {
       if (meta.disposed) return
       if (session?.parentID) return
+      const suppress = await suppressPageNotification()
+      if (meta.disposed) return
 
-      if (settings.sounds.errorsEnabled()) {
+      if (!suppress && settings.sounds.errorsEnabled()) {
         void playSoundById(settings.sounds.errors())
       }
 
@@ -378,8 +428,8 @@ function createServerNotificationState(input: {
         session?.title ??
         (typeof error === "string" ? error : language.t("notification.session.error.fallbackDescription"))
       const href = sessionID ? `/${base64Encode(directory)}/session/${sessionID}` : `/${base64Encode(directory)}`
-      if (settings.notifications.errors()) {
-        void platform.notify(language.t("notification.session.error.title"), description, href)
+      if (!suppress && settings.notifications.errors()) {
+        void platform.notify(language.t("notification.session.error.title"), description, () => input.navigate(href))
       }
     })
   }

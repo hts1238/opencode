@@ -58,7 +58,7 @@ const SettingsModelsContent: Component = () => {
   const language = useLanguage()
   const serverSync = useServerSync()
   const models = useModels()
-  const providers = useProviders()
+  const providers = useProviders(() => undefined)
 
   const handleConfigError = (err: unknown, rollback: () => void) => {
     rollback()
@@ -69,7 +69,9 @@ const SettingsModelsContent: Component = () => {
   }
 
   const updateConfig = (config: Config, rollback: () => void) => {
-    void serverSync().updateConfig(config).catch((err: unknown) => handleConfigError(err, rollback))
+    void serverSync()
+      .updateConfig(config)
+      .catch((err: unknown) => handleConfigError(err, rollback))
   }
 
   const configuredDefaultModel = createMemo(() => {
