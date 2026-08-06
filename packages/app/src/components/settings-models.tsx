@@ -175,25 +175,27 @@ const SettingsModelsContent: Component = () => {
             >
               <ModelSelectorPopover
                 model={defaultModelState}
-                triggerAs={Button}
-                triggerProps={{
-                  variant: "secondary",
-                  size: "small",
-                  class: "min-w-0 max-w-[260px] text-12-regular text-text-base group",
-                  "data-action": "settings-default-model",
-                }}
-              >
-                <Show when={currentDefaultModel()?.provider.id}>
-                  <ProviderIcon
-                    id={currentDefaultModel()?.provider.id ?? ""}
-                    class="size-4 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity duration-150"
-                  />
-                </Show>
-                <span class="truncate">
-                  {currentDefaultModel()?.name ?? language.t("settings.models.defaultModel.empty")}
-                </span>
-                <Icon name="chevron-down" size="small" class="shrink-0" />
-              </ModelSelectorPopover>
+                trigger={(triggerProps) => (
+                  <Button
+                    {...triggerProps}
+                    variant="secondary"
+                    size="small"
+                    class="min-w-0 max-w-[260px] text-12-regular text-text-base group"
+                    data-action="settings-default-model"
+                  >
+                    <Show when={currentDefaultModel()?.provider.id}>
+                      <ProviderIcon
+                        id={currentDefaultModel()?.provider.id ?? ""}
+                        class="size-4 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity duration-150"
+                      />
+                    </Show>
+                    <span class="truncate">
+                      {currentDefaultModel()?.name ?? language.t("settings.models.defaultModel.empty")}
+                    </span>
+                    <Icon name="chevron-down" size="small" class="shrink-0" />
+                  </Button>
+                )}
+              />
             </SettingsRow>
           </SettingsList>
         </div>
