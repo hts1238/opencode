@@ -25,6 +25,10 @@ export type TimelineRowMap = {
     group: PartGroup
     previousAssistantPart: boolean
   }
+  AssistantPreamble: {
+    userMessageID: string
+    groups: PartGroup[]
+  }
   Thinking: { userMessageID: string; reasoningHeading?: string }
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
@@ -167,8 +171,26 @@ export namespace Timeline {
       )
     }
 
-    let assistantGroupIndex = 0
-    assistantItems.forEach((item) => {
+    const finalTextIndex = finalAssistantTextIndex(assistantItems, assistantPartRefs)
+    const preambleItems = finalTextIndex > 0 ? assistantItems.slice(0, finalTextIndex) : []
+    const preambleGroups = preambleItems.flatMap((item) => (item.type === "part" ? [item.group] : []))
+    const canCollapsePreamble =
+      preambleItems.length > 0 &&
+      preambleGroups.length === preambleItems.length &&
+      preambleGroups.every((group) => !assistantGroupTextPart(group, assistantPartRefs))
+    const responseItems = canCollapsePreamble ? assistantItems.slice(finalTextIndex) : assistantItems
+
+    if (canCollapsePreamble) {
+      rows.push(
+        new TimelineRow.AssistantPreamble({
+          userMessageID: userMessage.id,
+          groups: preambleGroups,
+        }),
+      )
+    }
+
+    let assistantGroupIndex = canCollapsePreamble ? 1 : 0
+    responseItems.forEach((item) => {
       if (item.type === "interrupted") {
         rows.push(
           new TimelineRow.TurnDivider({
@@ -228,6 +250,26 @@ export namespace Timeline {
     }
 
     return rows
+  }
+
+  function finalAssistantTextIndex(
+    items: Array<{ type: "part"; group: PartGroup } | { type: "interrupted" }>,
+    refs: Array<{ messageID: string; part: Part }>,
+  ) {
+    for (let index = items.length - 1; index >= 0; index--) {
+      const item = items[index]
+      if (!item || item.type !== "part") continue
+      if (assistantGroupTextPart(item.group, refs)) return index
+    }
+    return -1
+  }
+
+  function assistantGroupTextPart(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
+    if (group.type !== "part") return false
+    return (
+      refs.find((ref) => ref.messageID === group.ref.messageID && ref.part.id === group.ref.partID)?.part?.type ===
+      "text"
+    )
   }
 
   function reasoningHeading(text: string) {

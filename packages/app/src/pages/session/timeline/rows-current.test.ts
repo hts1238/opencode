@@ -14,6 +14,39 @@ mock.module("@opencode-ai/session-ui/message-part", () => ({
 
 const { Timeline, TimelineRow } = await import("./rows")
 
+type CurrentAssistant = Extract<SessionMessageInfo, { type: "assistant" }>
+
+function assistant(id: string, content: CurrentAssistant["content"], error?: CurrentAssistant["error"]) {
+  return {
+    id,
+    type: "assistant",
+    agent: "build",
+    model: { id: "model", providerID: "provider" },
+    content,
+    error,
+    time: { created: 2, completed: 3 },
+  } satisfies CurrentAssistant
+}
+
+function constructAssistantRows(assistants: CurrentAssistant[]) {
+  const source = [
+    { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
+    ...assistants,
+  ] satisfies SessionMessageInfo[]
+  const normalized = normalizeSessionMessages("ses_1", source)
+  const messages = new Map(normalized.messages.map((message) => [message.id, message]))
+
+  return Timeline.constructSessionMessageRows(
+    source,
+    (messageID) => messages.get(messageID),
+    (messageID) => normalized.parts.get(messageID) ?? [],
+    true,
+    "idle",
+    true,
+    normalized.messages.filter((message) => message.role === "user"),
+  ).rows
+}
+
 describe("current session timeline rows", () => {
   test("derives turns and tagged rows from chronological current messages", () => {
     const source = [
@@ -203,5 +236,49 @@ describe("current session timeline rows", () => {
     )
 
     expect(result.rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart"])
+  })
+
+  test("keeps reasoning visible until the assistant has a final text response", () => {
+    const rows = constructAssistantRows([assistant("msg_assistant", [{ type: "reasoning", text: "thinking" }])])
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart"])
+  })
+
+  test("collapses non-text preamble before the only assistant text", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "reasoning", text: "thinking" },
+        { type: "text", text: "Final answer." },
+      ]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0"])
+  })
+
+  test("does not collapse intermediate assistant text", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "reasoning", text: "thinking" },
+        { type: "text", text: "Working on it." },
+        { type: "text", text: "Final answer." },
+      ]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "AssistantPart", "AssistantPart"])
+  })
+
+  test("does not collapse content across an interruption boundary", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_interrupted", [{ type: "reasoning", text: "thinking" }], {
+        type: "MessageAbortedError",
+        message: "interrupted",
+      }),
+      assistant("msg_resumed", [{ type: "text", text: "Final answer." }]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "TurnDivider", "AssistantPart"])
   })
 })
