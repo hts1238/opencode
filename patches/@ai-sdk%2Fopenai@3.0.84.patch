@@ -1,0 +1,883 @@
+diff --git a/dist/index.js b/dist/index.js
+index d3ff1b846ec75b49094de64396e1d947ca280150..b1b85fc649f425b0fafbf8b16da4e9c2b3ac1c53 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3728,6 +3728,7 @@ var openaiResponsesChunkSchema = (0, import_provider_utils27.lazySchema)(
+       import_v422.z.object({
+         type: import_v422.z.literal("response.output_text.delta"),
+         item_id: import_v422.z.string(),
++        output_index: import_v422.z.number().nullish(),
+         delta: import_v422.z.string(),
+         logprobs: import_v422.z.array(
+           import_v422.z.object({
+@@ -4235,17 +4236,20 @@ var openaiResponsesChunkSchema = (0, import_provider_utils27.lazySchema)(
+       import_v422.z.object({
+         type: import_v422.z.literal("response.reasoning_summary_part.added"),
+         item_id: import_v422.z.string(),
++        output_index: import_v422.z.number().nullish(),
+         summary_index: import_v422.z.number()
+       }),
+       import_v422.z.object({
+         type: import_v422.z.literal("response.reasoning_summary_text.delta"),
+         item_id: import_v422.z.string(),
++        output_index: import_v422.z.number().nullish(),
+         summary_index: import_v422.z.number(),
+         delta: import_v422.z.string()
+       }),
+       import_v422.z.object({
+         type: import_v422.z.literal("response.reasoning_summary_part.done"),
+         item_id: import_v422.z.string(),
++        output_index: import_v422.z.number().nullish(),
+         summary_index: import_v422.z.number()
+       }),
+       import_v422.z.object({
+@@ -5999,6 +6003,8 @@ var OpenAIResponsesLanguageModel = class {
+     let activeMessagePhase;
+     let hasFunctionCall = false;
+     const activeReasoning = {};
++    const activeOutputItemIds = {};
++    const resolveOutputItemId = ({ itemId, outputIndex }) => outputIndex == null ? itemId : activeOutputItemIds[outputIndex] ?? itemId;
+     let serviceTier;
+     let reasoningContext;
+     const hostedToolSearchCallIds = [];
+@@ -6188,6 +6194,7 @@ var OpenAIResponsesLanguageModel = class {
+                 };
+               } else if (value.item.type === "shell_call_output") {
+               } else if (value.item.type === "message") {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 ongoingAnnotations.splice(0, ongoingAnnotations.length);
+                 activeMessagePhase = (_b = value.item.phase) != null ? _b : void 0;
+                 controller.enqueue({
+@@ -6203,6 +6210,7 @@ var OpenAIResponsesLanguageModel = class {
+                   }
+                 });
+               } else if (isResponseOutputItemAddedChunk(value) && value.item.type === "reasoning") {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 activeReasoning[value.item.id] = {
+                   encryptedContent: value.item.encrypted_content,
+                   summaryParts: { 0: "active" }
+@@ -6220,14 +6228,18 @@ var OpenAIResponsesLanguageModel = class {
+               }
+             } else if (isResponseOutputItemDoneChunk(value)) {
+               if (value.item.type === "message") {
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index
++                });
+                 const phase = (_d = value.item.phase) != null ? _d : activeMessagePhase;
+                 activeMessagePhase = void 0;
+                 controller.enqueue({
+                   type: "text-end",
+-                  id: value.item.id,
++                  id: itemId,
+                   providerMetadata: {
+                     [providerOptionsName]: {
+-                      itemId: value.item.id,
++                      itemId,
+                       ...phase != null && { phase },
+                       ...ongoingAnnotations.length > 0 && {
+                         annotations: ongoingAnnotations
+@@ -6235,6 +6247,7 @@ var OpenAIResponsesLanguageModel = class {
+                     }
+                   }
+                 });
++                activeOutputItemIds[value.output_index] = void 0;
+               } else if (value.item.type === "function_call") {
+                 ongoingToolCalls[value.output_index] = void 0;
+                 hasFunctionCall = true;
+@@ -6554,25 +6567,32 @@ var OpenAIResponsesLanguageModel = class {
+                   }
+                 });
+               } else if (value.item.type === "reasoning") {
+-                const activeReasoningPart = activeReasoning[value.item.id];
+-                const summaryPartIndices = Object.entries(
+-                  activeReasoningPart.summaryParts
+-                ).filter(
+-                  ([_, status]) => status === "active" || status === "can-conclude"
+-                ).map(([summaryIndex]) => summaryIndex);
+-                for (const summaryIndex of summaryPartIndices) {
+-                  controller.enqueue({
+-                    type: "reasoning-end",
+-                    id: `${value.item.id}:${summaryIndex}`,
+-                    providerMetadata: {
+-                      [providerOptionsName]: {
+-                        itemId: value.item.id,
+-                        reasoningEncryptedContent: (_q = value.item.encrypted_content) != null ? _q : null
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index
++                });
++                const activeReasoningPart = activeReasoning[itemId];
++                if (activeReasoningPart != null) {
++                  const summaryPartIndices = Object.entries(
++                    activeReasoningPart.summaryParts
++                  ).filter(
++                    ([_, status]) => status === "active" || status === "can-conclude"
++                  ).map(([summaryIndex]) => summaryIndex);
++                  for (const summaryIndex of summaryPartIndices) {
++                    controller.enqueue({
++                      type: "reasoning-end",
++                      id: `${itemId}:${summaryIndex}`,
++                      providerMetadata: {
++                        [providerOptionsName]: {
++                          itemId,
++                          reasoningEncryptedContent: (_q = value.item.encrypted_content) != null ? _q : null
++                        }
+                       }
+-                    }
+-                  });
++                    });
++                  }
++                  delete activeReasoning[itemId];
+                 }
+-                delete activeReasoning[value.item.id];
++                activeOutputItemIds[value.output_index] = void 0;
+               }
+             } else if (isResponseFunctionCallArgumentsDeltaChunk(value)) {
+               const toolCall = ongoingToolCalls[value.output_index];
+@@ -6675,70 +6695,91 @@ var OpenAIResponsesLanguageModel = class {
+                 modelId: value.response.model
+               });
+             } else if (isTextDeltaChunk(value)) {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               controller.enqueue({
+                 type: "text-delta",
+-                id: value.item_id,
++                id: itemId,
+                 delta: value.delta
+               });
+               if (((_s = (_r = options.providerOptions) == null ? void 0 : _r[providerOptionsName]) == null ? void 0 : _s.logprobs) && value.logprobs) {
+                 logprobs.push(value.logprobs);
+               }
+             } else if (value.type === "response.reasoning_summary_part.added") {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               if (value.summary_index > 0) {
+-                const activeReasoningPart = activeReasoning[value.item_id];
+-                activeReasoningPart.summaryParts[value.summary_index] = "active";
+-                for (const summaryIndex of Object.keys(
+-                  activeReasoningPart.summaryParts
+-                )) {
+-                  if (activeReasoningPart.summaryParts[summaryIndex] === "can-conclude") {
+-                    controller.enqueue({
+-                      type: "reasoning-end",
+-                      id: `${value.item_id}:${summaryIndex}`,
+-                      providerMetadata: {
+-                        [providerOptionsName]: {
+-                          itemId: value.item_id
++                const activeReasoningPart = activeReasoning[itemId];
++                if (activeReasoningPart != null) {
++                  activeReasoningPart.summaryParts[value.summary_index] = "active";
++                  for (const summaryIndex of Object.keys(
++                    activeReasoningPart.summaryParts
++                  )) {
++                    if (activeReasoningPart.summaryParts[summaryIndex] === "can-conclude") {
++                      controller.enqueue({
++                        type: "reasoning-end",
++                        id: `${itemId}:${summaryIndex}`,
++                        providerMetadata: {
++                          [providerOptionsName]: {
++                            itemId
++                          }
+                         }
+-                      }
+-                    });
+-                    activeReasoningPart.summaryParts[summaryIndex] = "concluded";
+-                  }
+-                }
+-                controller.enqueue({
+-                  type: "reasoning-start",
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id,
+-                      reasoningEncryptedContent: (_u = (_t = activeReasoning[value.item_id]) == null ? void 0 : _t.encryptedContent) != null ? _u : null
++                      });
++                      activeReasoningPart.summaryParts[summaryIndex] = "concluded";
+                     }
+                   }
+-                });
++                  controller.enqueue({
++                    type: "reasoning-start",
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId,
++                        reasoningEncryptedContent: (_u = activeReasoningPart.encryptedContent) != null ? _u : null
++                      }
++                    }
++                  });
++                }
+               }
+             } else if (value.type === "response.reasoning_summary_text.delta") {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               controller.enqueue({
+                 type: "reasoning-delta",
+-                id: `${value.item_id}:${value.summary_index}`,
++                id: `${itemId}:${value.summary_index}`,
+                 delta: value.delta,
+                 providerMetadata: {
+                   [providerOptionsName]: {
+-                    itemId: value.item_id
++                    itemId
+                   }
+                 }
+               });
+             } else if (value.type === "response.reasoning_summary_part.done") {
+-              if (store) {
+-                controller.enqueue({
+-                  type: "reasoning-end",
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
++              const activeReasoningPart = activeReasoning[itemId];
++              if (activeReasoningPart != null) {
++                if (store) {
++                  controller.enqueue({
++                    type: "reasoning-end",
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId
++                      }
+                     }
+-                  }
+-                });
+-                activeReasoning[value.item_id].summaryParts[value.summary_index] = "concluded";
+-              } else {
+-                activeReasoning[value.item_id].summaryParts[value.summary_index] = "can-conclude";
++                  });
++                  activeReasoningPart.summaryParts[value.summary_index] = "concluded";
++                } else {
++                  activeReasoningPart.summaryParts[value.summary_index] = "can-conclude";
++                }
+               }
+             } else if (isResponseFinishedChunk(value)) {
+               finishReason = {
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 26440439553af2fd793f78cee475e81e6cb84a0e..08fd7c734a8dd085b3b42b694dd2c10b449f02dc 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -3826,6 +3826,7 @@ var openaiResponsesChunkSchema = lazySchema20(
+       z22.object({
+         type: z22.literal("response.output_text.delta"),
+         item_id: z22.string(),
++        output_index: z22.number().nullish(),
+         delta: z22.string(),
+         logprobs: z22.array(
+           z22.object({
+@@ -4333,17 +4334,20 @@ var openaiResponsesChunkSchema = lazySchema20(
+       z22.object({
+         type: z22.literal("response.reasoning_summary_part.added"),
+         item_id: z22.string(),
++        output_index: z22.number().nullish(),
+         summary_index: z22.number()
+       }),
+       z22.object({
+         type: z22.literal("response.reasoning_summary_text.delta"),
+         item_id: z22.string(),
++        output_index: z22.number().nullish(),
+         summary_index: z22.number(),
+         delta: z22.string()
+       }),
+       z22.object({
+         type: z22.literal("response.reasoning_summary_part.done"),
+         item_id: z22.string(),
++        output_index: z22.number().nullish(),
+         summary_index: z22.number()
+       }),
+       z22.object({
+@@ -6102,6 +6106,8 @@ var OpenAIResponsesLanguageModel = class {
+     let activeMessagePhase;
+     let hasFunctionCall = false;
+     const activeReasoning = {};
++    const activeOutputItemIds = {};
++    const resolveOutputItemId = ({ itemId, outputIndex }) => outputIndex == null ? itemId : activeOutputItemIds[outputIndex] ?? itemId;
+     let serviceTier;
+     let reasoningContext;
+     const hostedToolSearchCallIds = [];
+@@ -6291,6 +6297,7 @@ var OpenAIResponsesLanguageModel = class {
+                 };
+               } else if (value.item.type === "shell_call_output") {
+               } else if (value.item.type === "message") {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 ongoingAnnotations.splice(0, ongoingAnnotations.length);
+                 activeMessagePhase = (_b = value.item.phase) != null ? _b : void 0;
+                 controller.enqueue({
+@@ -6306,6 +6313,7 @@ var OpenAIResponsesLanguageModel = class {
+                   }
+                 });
+               } else if (isResponseOutputItemAddedChunk(value) && value.item.type === "reasoning") {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 activeReasoning[value.item.id] = {
+                   encryptedContent: value.item.encrypted_content,
+                   summaryParts: { 0: "active" }
+@@ -6323,14 +6331,18 @@ var OpenAIResponsesLanguageModel = class {
+               }
+             } else if (isResponseOutputItemDoneChunk(value)) {
+               if (value.item.type === "message") {
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index
++                });
+                 const phase = (_d = value.item.phase) != null ? _d : activeMessagePhase;
+                 activeMessagePhase = void 0;
+                 controller.enqueue({
+                   type: "text-end",
+-                  id: value.item.id,
++                  id: itemId,
+                   providerMetadata: {
+                     [providerOptionsName]: {
+-                      itemId: value.item.id,
++                      itemId,
+                       ...phase != null && { phase },
+                       ...ongoingAnnotations.length > 0 && {
+                         annotations: ongoingAnnotations
+@@ -6338,6 +6350,7 @@ var OpenAIResponsesLanguageModel = class {
+                     }
+                   }
+                 });
++                activeOutputItemIds[value.output_index] = void 0;
+               } else if (value.item.type === "function_call") {
+                 ongoingToolCalls[value.output_index] = void 0;
+                 hasFunctionCall = true;
+@@ -6657,25 +6670,32 @@ var OpenAIResponsesLanguageModel = class {
+                   }
+                 });
+               } else if (value.item.type === "reasoning") {
+-                const activeReasoningPart = activeReasoning[value.item.id];
+-                const summaryPartIndices = Object.entries(
+-                  activeReasoningPart.summaryParts
+-                ).filter(
+-                  ([_, status]) => status === "active" || status === "can-conclude"
+-                ).map(([summaryIndex]) => summaryIndex);
+-                for (const summaryIndex of summaryPartIndices) {
+-                  controller.enqueue({
+-                    type: "reasoning-end",
+-                    id: `${value.item.id}:${summaryIndex}`,
+-                    providerMetadata: {
+-                      [providerOptionsName]: {
+-                        itemId: value.item.id,
+-                        reasoningEncryptedContent: (_q = value.item.encrypted_content) != null ? _q : null
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index
++                });
++                const activeReasoningPart = activeReasoning[itemId];
++                if (activeReasoningPart != null) {
++                  const summaryPartIndices = Object.entries(
++                    activeReasoningPart.summaryParts
++                  ).filter(
++                    ([_, status]) => status === "active" || status === "can-conclude"
++                  ).map(([summaryIndex]) => summaryIndex);
++                  for (const summaryIndex of summaryPartIndices) {
++                    controller.enqueue({
++                      type: "reasoning-end",
++                      id: `${itemId}:${summaryIndex}`,
++                      providerMetadata: {
++                        [providerOptionsName]: {
++                          itemId,
++                          reasoningEncryptedContent: (_q = value.item.encrypted_content) != null ? _q : null
++                        }
+                       }
+-                    }
+-                  });
++                    });
++                  }
++                  delete activeReasoning[itemId];
+                 }
+-                delete activeReasoning[value.item.id];
++                activeOutputItemIds[value.output_index] = void 0;
+               }
+             } else if (isResponseFunctionCallArgumentsDeltaChunk(value)) {
+               const toolCall = ongoingToolCalls[value.output_index];
+@@ -6778,70 +6798,91 @@ var OpenAIResponsesLanguageModel = class {
+                 modelId: value.response.model
+               });
+             } else if (isTextDeltaChunk(value)) {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               controller.enqueue({
+                 type: "text-delta",
+-                id: value.item_id,
++                id: itemId,
+                 delta: value.delta
+               });
+               if (((_s = (_r = options.providerOptions) == null ? void 0 : _r[providerOptionsName]) == null ? void 0 : _s.logprobs) && value.logprobs) {
+                 logprobs.push(value.logprobs);
+               }
+             } else if (value.type === "response.reasoning_summary_part.added") {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               if (value.summary_index > 0) {
+-                const activeReasoningPart = activeReasoning[value.item_id];
+-                activeReasoningPart.summaryParts[value.summary_index] = "active";
+-                for (const summaryIndex of Object.keys(
+-                  activeReasoningPart.summaryParts
+-                )) {
+-                  if (activeReasoningPart.summaryParts[summaryIndex] === "can-conclude") {
+-                    controller.enqueue({
+-                      type: "reasoning-end",
+-                      id: `${value.item_id}:${summaryIndex}`,
+-                      providerMetadata: {
+-                        [providerOptionsName]: {
+-                          itemId: value.item_id
++                const activeReasoningPart = activeReasoning[itemId];
++                if (activeReasoningPart != null) {
++                  activeReasoningPart.summaryParts[value.summary_index] = "active";
++                  for (const summaryIndex of Object.keys(
++                    activeReasoningPart.summaryParts
++                  )) {
++                    if (activeReasoningPart.summaryParts[summaryIndex] === "can-conclude") {
++                      controller.enqueue({
++                        type: "reasoning-end",
++                        id: `${itemId}:${summaryIndex}`,
++                        providerMetadata: {
++                          [providerOptionsName]: {
++                            itemId
++                          }
+                         }
+-                      }
+-                    });
+-                    activeReasoningPart.summaryParts[summaryIndex] = "concluded";
+-                  }
+-                }
+-                controller.enqueue({
+-                  type: "reasoning-start",
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id,
+-                      reasoningEncryptedContent: (_u = (_t = activeReasoning[value.item_id]) == null ? void 0 : _t.encryptedContent) != null ? _u : null
++                      });
++                      activeReasoningPart.summaryParts[summaryIndex] = "concluded";
+                     }
+                   }
+-                });
++                  controller.enqueue({
++                    type: "reasoning-start",
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId,
++                        reasoningEncryptedContent: (_u = activeReasoningPart.encryptedContent) != null ? _u : null
++                      }
++                    }
++                  });
++                }
+               }
+             } else if (value.type === "response.reasoning_summary_text.delta") {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
+               controller.enqueue({
+                 type: "reasoning-delta",
+-                id: `${value.item_id}:${value.summary_index}`,
++                id: `${itemId}:${value.summary_index}`,
+                 delta: value.delta,
+                 providerMetadata: {
+                   [providerOptionsName]: {
+-                    itemId: value.item_id
++                    itemId
+                   }
+                 }
+               });
+             } else if (value.type === "response.reasoning_summary_part.done") {
+-              if (store) {
+-                controller.enqueue({
+-                  type: "reasoning-end",
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index
++              });
++              const activeReasoningPart = activeReasoning[itemId];
++              if (activeReasoningPart != null) {
++                if (store) {
++                  controller.enqueue({
++                    type: "reasoning-end",
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId
++                      }
+                     }
+-                  }
+-                });
+-                activeReasoning[value.item_id].summaryParts[value.summary_index] = "concluded";
+-              } else {
+-                activeReasoning[value.item_id].summaryParts[value.summary_index] = "can-conclude";
++                  });
++                  activeReasoningPart.summaryParts[value.summary_index] = "concluded";
++                } else {
++                  activeReasoningPart.summaryParts[value.summary_index] = "can-conclude";
++                }
+               }
+             } else if (isResponseFinishedChunk(value)) {
+               finishReason = {
+diff --git a/src/responses/openai-responses-api.ts b/src/responses/openai-responses-api.ts
+index 9ab482d7417c2e547398846b2e44e305d095ef25..edccc04940be9879ad706924ed9a82326373b7e7 100644
+--- a/src/responses/openai-responses-api.ts
++++ b/src/responses/openai-responses-api.ts
+@@ -550,6 +550,7 @@ export const openaiResponsesChunkSchema = lazySchema(() =>
+       z.object({
+         type: z.literal('response.output_text.delta'),
+         item_id: z.string(),
++        output_index: z.number().nullish(),
+         delta: z.string(),
+         logprobs: z
+           .array(
+@@ -1093,17 +1094,20 @@ export const openaiResponsesChunkSchema = lazySchema(() =>
+       z.object({
+         type: z.literal('response.reasoning_summary_part.added'),
+         item_id: z.string(),
++        output_index: z.number().nullish(),
+         summary_index: z.number(),
+       }),
+       z.object({
+         type: z.literal('response.reasoning_summary_text.delta'),
+         item_id: z.string(),
++        output_index: z.number().nullish(),
+         summary_index: z.number(),
+         delta: z.string(),
+       }),
+       z.object({
+         type: z.literal('response.reasoning_summary_part.done'),
+         item_id: z.string(),
++        output_index: z.number().nullish(),
+         summary_index: z.number(),
+       }),
+       z.object({
+diff --git a/src/responses/openai-responses-language-model.ts b/src/responses/openai-responses-language-model.ts
+index 926e7ec713480353b969901f19c5d1d8cc883dab..a1e464a6dc4a575603af51d0aee993b3f28ca81b 100644
+--- a/src/responses/openai-responses-language-model.ts
++++ b/src/responses/openai-responses-language-model.ts
+@@ -1157,6 +1157,20 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+       }
+     > = {};
+ 
++    // OpenAI-compatible providers can rotate opaque item ids between events.
++    // output_index remains stable for the lifetime of an output item.
++    const activeOutputItemIds: Record<number, string | undefined> = {};
++    const resolveOutputItemId = ({
++      itemId,
++      outputIndex,
++    }: {
++      itemId: string;
++      outputIndex?: number | null;
++    }) =>
++      outputIndex == null
++        ? itemId
++        : (activeOutputItemIds[outputIndex] ?? itemId);
++
+     let serviceTier: string | undefined;
+     let reasoningContext: ResponsesProviderMetadata['reasoningContext'];
+     const hostedToolSearchCallIds: string[] = [];
+@@ -1385,6 +1399,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+               } else if (value.item.type === 'shell_call_output') {
+                 // shell_call_output is handled in output_item.done
+               } else if (value.item.type === 'message') {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 ongoingAnnotations.splice(0, ongoingAnnotations.length);
+                 activeMessagePhase = value.item.phase ?? undefined;
+                 controller.enqueue({
+@@ -1403,6 +1418,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+                 isResponseOutputItemAddedChunk(value) &&
+                 value.item.type === 'reasoning'
+               ) {
++                activeOutputItemIds[value.output_index] = value.item.id;
+                 activeReasoning[value.item.id] = {
+                   encryptedContent: value.item.encrypted_content,
+                   summaryParts: { 0: 'active' },
+@@ -1422,14 +1438,18 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+               }
+             } else if (isResponseOutputItemDoneChunk(value)) {
+               if (value.item.type === 'message') {
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index,
++                });
+                 const phase = value.item.phase ?? activeMessagePhase;
+                 activeMessagePhase = undefined;
+                 controller.enqueue({
+                   type: 'text-end',
+-                  id: value.item.id,
++                  id: itemId,
+                   providerMetadata: {
+                     [providerOptionsName]: {
+-                      itemId: value.item.id,
++                      itemId,
+                       ...(phase != null && { phase }),
+                       ...(ongoingAnnotations.length > 0 && {
+                         annotations: ongoingAnnotations,
+@@ -1437,6 +1457,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+                     } satisfies ResponsesTextProviderMetadata,
+                   },
+                 });
++                activeOutputItemIds[value.output_index] = undefined;
+               } else if (value.item.type === 'function_call') {
+                 ongoingToolCalls[value.output_index] = undefined;
+                 hasFunctionCall = true;
+@@ -1829,34 +1850,41 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+                   } satisfies InferSchema<typeof shellOutputSchema>,
+                 });
+               } else if (value.item.type === 'reasoning') {
+-                const activeReasoningPart = activeReasoning[value.item.id];
+-
+-                // get all active or can-conclude summary parts' ids
+-                // to conclude ongoing reasoning parts:
+-                const summaryPartIndices = Object.entries(
+-                  activeReasoningPart.summaryParts,
+-                )
+-                  .filter(
+-                    ([_, status]) =>
+-                      status === 'active' || status === 'can-conclude',
++                const itemId = resolveOutputItemId({
++                  itemId: value.item.id,
++                  outputIndex: value.output_index,
++                });
++                const activeReasoningPart = activeReasoning[itemId];
++
++                if (activeReasoningPart != null) {
++                  // get all active or can-conclude summary parts' ids
++                  // to conclude ongoing reasoning parts:
++                  const summaryPartIndices = Object.entries(
++                    activeReasoningPart.summaryParts,
+                   )
+-                  .map(([summaryIndex]) => summaryIndex);
++                    .filter(
++                      ([_, status]) =>
++                        status === 'active' || status === 'can-conclude',
++                    )
++                    .map(([summaryIndex]) => summaryIndex);
+ 
+-                for (const summaryIndex of summaryPartIndices) {
+-                  controller.enqueue({
+-                    type: 'reasoning-end',
+-                    id: `${value.item.id}:${summaryIndex}`,
+-                    providerMetadata: {
+-                      [providerOptionsName]: {
+-                        itemId: value.item.id,
+-                        reasoningEncryptedContent:
+-                          value.item.encrypted_content ?? null,
+-                      } satisfies ResponsesReasoningProviderMetadata,
+-                    },
+-                  });
+-                }
++                  for (const summaryIndex of summaryPartIndices) {
++                    controller.enqueue({
++                      type: 'reasoning-end',
++                      id: `${itemId}:${summaryIndex}`,
++                      providerMetadata: {
++                        [providerOptionsName]: {
++                          itemId,
++                          reasoningEncryptedContent:
++                            value.item.encrypted_content ?? null,
++                        } satisfies ResponsesReasoningProviderMetadata,
++                      },
++                    });
++                  }
+ 
+-                delete activeReasoning[value.item.id];
++                  delete activeReasoning[itemId];
++                }
++                activeOutputItemIds[value.output_index] = undefined;
+               }
+             } else if (isResponseFunctionCallArgumentsDeltaChunk(value)) {
+               const toolCall = ongoingToolCalls[value.output_index];
+@@ -1974,9 +2002,13 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+                 modelId: value.response.model,
+               });
+             } else if (isTextDeltaChunk(value)) {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index,
++              });
+               controller.enqueue({
+                 type: 'text-delta',
+-                id: value.item_id,
++                id: itemId,
+                 delta: value.delta,
+               });
+ 
+@@ -1987,83 +2019,98 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
+                 logprobs.push(value.logprobs);
+               }
+             } else if (value.type === 'response.reasoning_summary_part.added') {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index,
++              });
+               // the first reasoning start is pushed in isResponseOutputItemAddedReasoningChunk
+               if (value.summary_index > 0) {
+-                const activeReasoningPart = activeReasoning[value.item_id]!;
+-
+-                activeReasoningPart.summaryParts[value.summary_index] =
+-                  'active';
+-
+-                // since there is a new active summary part, we can conclude all can-conclude summary parts
+-                for (const summaryIndex of Object.keys(
+-                  activeReasoningPart.summaryParts,
+-                )) {
+-                  if (
+-                    activeReasoningPart.summaryParts[summaryIndex] ===
+-                    'can-conclude'
+-                  ) {
+-                    controller.enqueue({
+-                      type: 'reasoning-end',
+-                      id: `${value.item_id}:${summaryIndex}`,
+-                      providerMetadata: {
+-                        [providerOptionsName]: {
+-                          itemId: value.item_id,
+-                        } satisfies ResponsesReasoningProviderMetadata,
+-                      },
+-                    });
+-                    activeReasoningPart.summaryParts[summaryIndex] =
+-                      'concluded';
++                const activeReasoningPart = activeReasoning[itemId];
++
++                if (activeReasoningPart != null) {
++                  activeReasoningPart.summaryParts[value.summary_index] =
++                    'active';
++
++                  // since there is a new active summary part, we can conclude all can-conclude summary parts
++                  for (const summaryIndex of Object.keys(
++                    activeReasoningPart.summaryParts,
++                  )) {
++                    if (
++                      activeReasoningPart.summaryParts[summaryIndex] ===
++                      'can-conclude'
++                    ) {
++                      controller.enqueue({
++                        type: 'reasoning-end',
++                        id: `${itemId}:${summaryIndex}`,
++                        providerMetadata: {
++                          [providerOptionsName]: {
++                            itemId,
++                          } satisfies ResponsesReasoningProviderMetadata,
++                        },
++                      });
++                      activeReasoningPart.summaryParts[summaryIndex] =
++                        'concluded';
++                    }
+                   }
+-                }
+ 
+-                controller.enqueue({
+-                  type: 'reasoning-start',
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id,
+-                      reasoningEncryptedContent:
+-                        activeReasoning[value.item_id]?.encryptedContent ??
+-                        null,
+-                    } satisfies ResponsesReasoningProviderMetadata,
+-                  },
+-                });
++                  controller.enqueue({
++                    type: 'reasoning-start',
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId,
++                        reasoningEncryptedContent:
++                          activeReasoningPart.encryptedContent ?? null,
++                      } satisfies ResponsesReasoningProviderMetadata,
++                    },
++                  });
++                }
+               }
+             } else if (value.type === 'response.reasoning_summary_text.delta') {
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index,
++              });
+               controller.enqueue({
+                 type: 'reasoning-delta',
+-                id: `${value.item_id}:${value.summary_index}`,
++                id: `${itemId}:${value.summary_index}`,
+                 delta: value.delta,
+                 providerMetadata: {
+                   [providerOptionsName]: {
+-                    itemId: value.item_id,
++                    itemId,
+                   } satisfies ResponsesReasoningProviderMetadata,
+                 },
+               });
+             } else if (value.type === 'response.reasoning_summary_part.done') {
+-              // when OpenAI stores the message data, we can immediately conclude the reasoning part
+-              // since we do not need to send the encrypted content.
+-              if (store) {
+-                controller.enqueue({
+-                  type: 'reasoning-end',
+-                  id: `${value.item_id}:${value.summary_index}`,
+-                  providerMetadata: {
+-                    [providerOptionsName]: {
+-                      itemId: value.item_id,
+-                    } satisfies ResponsesReasoningProviderMetadata,
+-                  },
+-                });
++              const itemId = resolveOutputItemId({
++                itemId: value.item_id,
++                outputIndex: value.output_index,
++              });
++              const activeReasoningPart = activeReasoning[itemId];
+ 
+-                // mark the summary part as concluded
+-                activeReasoning[value.item_id]!.summaryParts[
+-                  value.summary_index
+-                ] = 'concluded';
+-              } else {
+-                // mark the summary part as can-conclude only
+-                // because we need to have a final summary part with the encrypted content
+-                activeReasoning[value.item_id]!.summaryParts[
+-                  value.summary_index
+-                ] = 'can-conclude';
++              if (activeReasoningPart != null) {
++                // when OpenAI stores the message data, we can immediately conclude the reasoning part
++                // since we do not need to send the encrypted content.
++                if (store) {
++                  controller.enqueue({
++                    type: 'reasoning-end',
++                    id: `${itemId}:${value.summary_index}`,
++                    providerMetadata: {
++                      [providerOptionsName]: {
++                        itemId,
++                      } satisfies ResponsesReasoningProviderMetadata,
++                    },
++                  });
++
++                  // mark the summary part as concluded
++                  activeReasoningPart.summaryParts[value.summary_index] =
++                    'concluded';
++                } else {
++                  // mark the summary part as can-conclude only
++                  // because we need to have a final summary part with the encrypted content
++                  activeReasoningPart.summaryParts[value.summary_index] =
++                    'can-conclude';
++                }
+               }
+             } else if (isResponseFinishedChunk(value)) {
+               finishReason = {

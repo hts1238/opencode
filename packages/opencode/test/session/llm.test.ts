@@ -1243,6 +1243,133 @@ describe("session.llm.stream", () => {
   )
 
   it.instance(
+    "correlates rotated OpenAI Responses item IDs by output index",
+    () =>
+      Effect.gen(function* () {
+        const model = loadFixture("openai", "gpt-5.2").model
+        const request = waitRequest(
+          "/responses",
+          createEventResponse(
+            [
+              {
+                type: "response.created",
+                response: {
+                  id: "resp-rotated",
+                  created_at: Math.floor(Date.now() / 1000),
+                  model: model.id,
+                  service_tier: null,
+                },
+              },
+              {
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "reasoning", id: "rs-added", encrypted_content: null },
+              },
+              {
+                type: "response.reasoning_summary_part.added",
+                item_id: "rs-summary-added",
+                output_index: 0,
+                summary_index: 0,
+              },
+              {
+                type: "response.reasoning_summary_text.delta",
+                item_id: "rs-summary-delta",
+                output_index: 0,
+                summary_index: 0,
+                delta: "Thinking",
+              },
+              {
+                type: "response.reasoning_summary_part.done",
+                item_id: "rs-summary-done",
+                output_index: 0,
+                summary_index: 0,
+              },
+              {
+                type: "response.output_item.done",
+                output_index: 0,
+                item: { type: "reasoning", id: "rs-done", encrypted_content: null },
+              },
+              {
+                type: "response.output_item.added",
+                output_index: 1,
+                item: { type: "message", id: "msg-added", phase: "final_answer" },
+              },
+              {
+                type: "response.output_text.delta",
+                item_id: "msg-delta",
+                output_index: 1,
+                delta: "Done",
+                logprobs: null,
+              },
+              {
+                type: "response.output_item.done",
+                output_index: 1,
+                item: { type: "message", id: "msg-done", phase: "final_answer" },
+              },
+              {
+                type: "response.completed",
+                response: {
+                  incomplete_details: null,
+                  usage: {
+                    input_tokens: 1,
+                    input_tokens_details: null,
+                    output_tokens: 2,
+                    output_tokens_details: { reasoning_tokens: 1 },
+                  },
+                  service_tier: null,
+                },
+              },
+            ],
+            true,
+          ),
+        )
+        const resolved = yield* Provider.use.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+        const sessionID = SessionID.make("session-test-rotated-openai-ids")
+        const agent = {
+          name: "test",
+          mode: "primary",
+          options: {},
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        } satisfies Agent.Info
+        const events = yield* LLM.Service.use((svc) =>
+          svc
+            .stream({
+              user: {
+                id: MessageID.make("msg_user-rotated-openai-ids"),
+                sessionID,
+                role: "user",
+                time: { created: Date.now() },
+                agent: agent.name,
+                model: { providerID: ProviderV2.ID.openai, modelID: resolved.id },
+              } satisfies SessionV1.User,
+              sessionID,
+              model: resolved,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [{ role: "user", content: "Hello" }],
+              tools: {},
+            })
+            .pipe(Stream.runCollect),
+        )
+
+        yield* Effect.promise(() => request)
+        expect(
+          Array.from(events).flatMap((event) =>
+            event.type === "reasoning-start" || event.type === "reasoning-delta" || event.type === "reasoning-end"
+              ? [event.id]
+              : [],
+          ),
+        ).toEqual(["rs-added:0", "rs-added:0", "rs-added:0"])
+        expect(
+          Array.from(events).flatMap((event) =>
+            event.type === "text-start" || event.type === "text-delta" || event.type === "text-end" ? [event.id] : [],
+          ),
+        ).toEqual(["msg-added", "msg-added", "msg-added"])
+      }),
+    { config: () => openAIConfig(loadFixture("openai", "gpt-5.2").model, `${state.server!.url.origin}/v1`) },
+  )
+
+  it.instance(
     "keeps supported OpenAI models on AI SDK path when native flag is off",
     () =>
       Effect.gen(function* () {
