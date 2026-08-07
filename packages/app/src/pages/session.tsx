@@ -913,9 +913,7 @@ export default function Page() {
             if (sessionKey() !== key) return
             void sync().session.sync(id, { force: true })
             void sync().session.todo(id, { force: true })
-            if (wantsReview()) {
-              void sync().session.diff(id, { force: true })
-            }
+            if (wantsReview()) refreshVcs()
           }, 0)
         })
       },

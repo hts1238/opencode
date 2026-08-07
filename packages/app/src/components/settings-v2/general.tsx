@@ -12,6 +12,7 @@ import { useSettings } from "@/context/settings"
 import { useServerSDK } from "@/context/server-sdk"
 import { useServerSync } from "@/context/server-sync"
 import { normalizeAgentList } from "@/context/global-sync/utils"
+import { loadCommands } from "@/context/global-sync/bootstrap"
 import { showToast } from "@/utils/toast"
 import { ExternalLink } from "../external-link"
 import { SettingsListV2 } from "./parts/list"
@@ -304,11 +305,14 @@ export const SettingsGeneralV2: Component<{
     try {
       const client = serverSdk().createClient({ directory, throwOnError: true })
       const skills = await client.app.refreshSkills()
-      const [agents, commands] = await Promise.all([client.app.agents(), client.command.list()])
+      const [agents, commands] = await Promise.all([
+        client.app.agents(),
+        loadCommands(directory, serverSdk().api.command, client, serverSdk().protocol),
+      ])
       const [, setWorkspace] = serverSync().child(directory, { bootstrap: false })
       batch(() => {
-        setWorkspace("agent", normalizeAgentList(agents.data))
-        setWorkspace("command", commands.data ?? [])
+        setWorkspace("agent", normalizeAgentList(agents.data ?? []))
+        setWorkspace("command", commands)
       })
       showToast({
         variant: "success",

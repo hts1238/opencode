@@ -31,6 +31,7 @@ import {
   useSettings,
 } from "@/context/settings"
 import { normalizeAgentList } from "@/context/global-sync/utils"
+import { loadCommands } from "@/context/global-sync/bootstrap"
 import { decode64 } from "@/utils/base64"
 import { playSoundById, SOUND_OPTIONS } from "@/utils/sound"
 import { ExternalLink } from "./external-link"
@@ -363,11 +364,14 @@ export const SettingsGeneral: Component = () => {
     try {
       const client = serverSdk().createClient({ directory: value, throwOnError: true })
       const skills = await client.app.refreshSkills()
-      const [agents, commands] = await Promise.all([client.app.agents(), client.command.list()])
+      const [agents, commands] = await Promise.all([
+        client.app.agents(),
+        loadCommands(value, serverSdk().api.command, client, serverSdk().protocol),
+      ])
       const [, setWorkspace] = serverSync().child(value, { bootstrap: false })
       batch(() => {
-        setWorkspace("agent", normalizeAgentList(agents.data))
-        setWorkspace("command", commands.data ?? [])
+        setWorkspace("agent", normalizeAgentList(agents.data ?? []))
+        setWorkspace("command", commands)
       })
       showToast({
         variant: "success",
