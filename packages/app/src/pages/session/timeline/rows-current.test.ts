@@ -258,7 +258,21 @@ describe("current session timeline rows", () => {
     expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0"])
   })
 
-  test("does not collapse intermediate assistant text", () => {
+  test("collapses intermediate text in a text-only response", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "text", text: "Working on it." },
+        { type: "text", text: "Final answer." },
+      ]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:text:0"])
+  })
+
+  test("collapses reasoning together with intermediate assistant text", () => {
     const rows = constructAssistantRows([
       assistant("msg_assistant", [
         { type: "reasoning", text: "thinking" },
@@ -267,7 +281,10 @@ describe("current session timeline rows", () => {
       ]),
     ])
 
-    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "AssistantPart", "AssistantPart"])
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0", "msg_assistant:text:0"])
   })
 
   test("does not collapse content across an interruption boundary", () => {

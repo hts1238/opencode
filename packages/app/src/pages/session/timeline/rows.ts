@@ -174,10 +174,7 @@ export namespace Timeline {
     const finalTextIndex = finalAssistantTextIndex(assistantItems, assistantPartRefs)
     const preambleItems = finalTextIndex > 0 ? assistantItems.slice(0, finalTextIndex) : []
     const preambleGroups = preambleItems.flatMap((item) => (item.type === "part" ? [item.group] : []))
-    const canCollapsePreamble =
-      preambleItems.length > 0 &&
-      preambleGroups.length === preambleItems.length &&
-      preambleGroups.every((group) => !assistantGroupTextPart(group, assistantPartRefs))
+    const canCollapsePreamble = preambleItems.length > 0 && preambleGroups.length === preambleItems.length
     const responseItems = canCollapsePreamble ? assistantItems.slice(finalTextIndex) : assistantItems
 
     if (canCollapsePreamble) {
