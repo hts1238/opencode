@@ -37,6 +37,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 const summary = Layer.succeed(
   SessionSummary.Service,
   SessionSummary.Service.of({
+    reset: () => Effect.void,
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),

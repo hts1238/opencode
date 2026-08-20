@@ -31,6 +31,7 @@ import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { sql } from "drizzle-orm"
 
 const mcp = Layer.succeed(
   MCP.Service,
@@ -129,6 +130,7 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const summary = yield* SessionSummary.Service
+      const database = yield* Database.Service
 
       const session = yield* sessions.create({
         title: "snapshot race test",
@@ -183,6 +185,18 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
         yield* Effect.sleep("100 millis")
       }
       expect(diff.length).toBeGreaterThan(0)
+
+      yield* summary.summarize({ sessionID: session.id, messageID: user.info.id })
+      yield* summary.summarize({ sessionID: session.id, messageID: user.info.id })
+      const saved = yield* database.db.get<{ count: number }>(sql`
+        SELECT count(*) AS count
+        FROM event
+        WHERE aggregate_id = ${session.id}
+          AND type = 'message.updated.1'
+          AND json_extract(data, '$.info.id') = ${user.info.id}
+          AND json_array_length(json_extract(data, '$.info.summary.diffs')) > 0
+      `)
+      expect(saved?.count).toBe(1)
     }),
     { git: true, config: providerCfg },
   ),

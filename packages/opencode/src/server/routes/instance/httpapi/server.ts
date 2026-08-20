@@ -63,6 +63,7 @@ import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { SessionCleanup } from "@/session/cleanup"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import * as SessionExecutionLocal from "@opencode-ai/core/session/execution/local"
@@ -234,6 +235,7 @@ const app = LayerNode.group([
   Todo.node,
   Session.node,
   SessionProjector.node,
+  SessionCleanup.node,
   SessionStatus.node,
   BackgroundJob.node,
   RuntimeFlags.node,

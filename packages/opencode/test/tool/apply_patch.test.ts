@@ -132,11 +132,12 @@ describe("tool.apply_patch freeform", () => {
         if (process.platform === "win32") {
           expect(result.output).not.toContain("\\")
         }
-        expect(result.metadata.diff).toContain("Index:")
+        expect(result.metadata).not.toHaveProperty("diff")
         expect(calls.length).toBe(1)
 
         // Verify permission metadata includes files array for UI rendering
         const permissionCall = calls[0]
+        expect(permissionCall.metadata.diff).toContain("Index:")
         expect(permissionCall.metadata.files).toHaveLength(3)
         expect(permissionCall.metadata.files.map((f) => f.type).sort()).toEqual(["add", "delete", "update"])
 

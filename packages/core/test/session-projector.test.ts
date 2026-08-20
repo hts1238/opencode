@@ -194,6 +194,14 @@ describe("SessionProjector", () => {
         delivery: "steer",
       })
       if (!admitted) return yield* Effect.die("Prompt admission failed")
+      expect(
+        yield* db
+          .select({ timeUpdated: SessionTable.time_updated })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ timeUpdated: DateTime.toEpochMillis(admitted.timeCreated) })
 
       const event = yield* events.publish(SessionEvent.Prompted, {
         sessionID,
@@ -331,7 +339,7 @@ describe("SessionProjector", () => {
       ).toMatchObject({
         agent: "build",
         model,
-        time_updated: DateTime.toEpochMillis(created),
+        time_updated: DateTime.toEpochMillis(DateTime.makeUnsafe(1)),
       })
     }),
   )

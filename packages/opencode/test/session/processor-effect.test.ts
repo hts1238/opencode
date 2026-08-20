@@ -30,6 +30,7 @@ import { LLMEvent } from "@opencode-ai/llm"
 const summary = Layer.succeed(
   SessionSummary.Service,
   SessionSummary.Service.of({
+    reset: () => Effect.void,
     summarize: () => Effect.void,
     diff: () => Effect.succeed([]),
     computeDiff: () => Effect.succeed([]),

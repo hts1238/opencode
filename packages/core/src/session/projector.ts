@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, lt, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -187,6 +187,12 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
       appendMessage,
     }
     yield* SessionMessageUpdater.update(adapter, event)
+    yield* db
+      .update(SessionTable)
+      .set({ time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+      .where(eq(SessionTable.id, event.data.sessionID))
+      .run()
+      .pipe(Effect.orDie)
   })
 }
 
@@ -257,7 +263,32 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const cutoff = retentionCutoff(event.metadata)
+        if (cutoff === undefined) {
+          yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+          return
+        }
+        yield* db
+          .delete(SessionTable)
+          .where(
+            and(
+              eq(SessionTable.id, event.data.sessionID),
+              lt(SessionTable.time_archived, cutoff),
+              lt(SessionTable.time_updated, cutoff),
+              sql`NOT EXISTS (SELECT 1 FROM session AS child WHERE child.parent_id = ${SessionTable.id})`,
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        const remaining = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (remaining) yield* Effect.die(new globalThis.Error("Session changed during retention cleanup"))
+      }),
     )
     yield* events.project(SessionV1.Event.MessageUpdated, (event) =>
       Effect.gen(function* () {
@@ -372,6 +403,12 @@ const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
+        yield* db
+          .update(SessionTable)
+          .set({ time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
       }),
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => run(db, event))
@@ -456,3 +493,10 @@ const layer = Layer.effectDiscard(
 )
 
 export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventV2.node, Database.node] })
+
+function retentionCutoff(metadata: Record<string, unknown> | undefined) {
+  const cleanup = metadata?.["sessionCleanup"]
+  if (typeof cleanup !== "object" || cleanup === null) return
+  const cutoff = Reflect.get(cleanup, "archivedBefore")
+  return typeof cutoff === "number" && Number.isFinite(cutoff) ? cutoff : undefined
+}

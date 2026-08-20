@@ -6,6 +6,7 @@ import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
+import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -64,6 +65,7 @@ function unquoteGitPath(input: string) {
 }
 
 export interface Interface {
+  readonly reset: (sessionID: SessionID) => Effect.Effect<void>
   readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
   readonly computeDiff: (input: { messages: SessionV1.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
@@ -78,6 +80,7 @@ const layer = Layer.effect(
     const snapshot = yield* Snapshot.Service
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
+    const locks = KeyedMutex.makeUnsafe<MessageID>()
 
     const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
       let from: string | undefined
@@ -99,19 +102,22 @@ const layer = Layer.effect(
       return []
     })
 
-    const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
-      sessionID: SessionID
-      messageID: MessageID
-    }) {
+    const reset = Effect.fn("SessionSummary.reset")(function* (sessionID: SessionID) {
       yield* sessions.setSummary({
-        sessionID: input.sessionID,
+        sessionID,
         summary: {
           additions: 0,
           deletions: 0,
           files: 0,
         },
       })
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: [] })
+      yield* events.publish(Session.Event.Diff, { sessionID, diff: [] })
+    })
+
+    const summarizeUnlocked = Effect.fn("SessionSummary.summarizeUnlocked")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+    }) {
       if ((yield* config.get()).snapshot === false) return
       const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
       if (!all.length) return
@@ -122,9 +128,14 @@ const layer = Layer.effect(
       const target = messages.find((m) => m.info.id === input.messageID)
       if (!target || target.info.role !== "user") return
       const msgDiffs = yield* computeDiff({ messages })
+      if (sameDiffs(target.info.summary?.diffs, msgDiffs)) return
       target.info.summary = { ...target.info.summary, diffs: msgDiffs }
       yield* sessions.updateMessage(target.info)
     })
+
+    const summarize: Interface["summarize"] = Effect.fn("SessionSummary.summarize")((input) =>
+      locks.withLock(input.messageID)(summarizeUnlocked(input)),
+    )
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
       if (!input.messageID) return []
@@ -141,7 +152,7 @@ const layer = Layer.effect(
       })
     })
 
-    return Service.of({ summarize, diff, computeDiff })
+    return Service.of({ reset, summarize, diff, computeDiff })
   }),
 )
 
@@ -150,6 +161,21 @@ export const DiffInput = Schema.Struct({
   messageID: Schema.optional(MessageID),
 })
 export type DiffInput = Schema.Schema.Type<typeof DiffInput>
+
+function sameDiffs(current: Snapshot.FileDiff[] | undefined, next: Snapshot.FileDiff[]) {
+  if (!current || current.length !== next.length) return false
+  return current.every((item, index) => {
+    const other = next[index]
+    return (
+      other !== undefined &&
+      item.file === other.file &&
+      item.patch === other.patch &&
+      item.additions === other.additions &&
+      item.deletions === other.deletions &&
+      item.status === other.status
+    )
+  })
+}
 
 export const node = LayerNode.make({
   service: Service,

@@ -1257,8 +1257,7 @@ const layer = Layer.effect(
               })
             }
 
-            if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
+            if (step === 1) yield* summary.reset(sessionID)
 
             if (step > 1 && lastFinished) {
               for (const m of msgs) {

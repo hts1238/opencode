@@ -39,7 +39,7 @@ import { SessionID, MessageID, PartID } from "./schema"
 import type { Provider } from "@/provider/provider"
 import { Global } from "@opencode-ai/core/global"
 import { Effect, Layer, Option, Context, Schema, Types } from "effect"
-import { NonNegativeInt, optional } from "@opencode-ai/core/schema"
+import { AbsolutePath, NonNegativeInt, optional } from "@opencode-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -449,7 +449,10 @@ export interface Interface {
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
-  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
+  readonly remove: (
+    sessionID: SessionID,
+    options?: { archivedBefore: number; requireLeaf: true },
+  ) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -605,8 +608,15 @@ const layer: Layer.Layer<
       return rows.map(fromRow)
     })
 
-    const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
+    const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID, options) {
       const session = yield* get(sessionID)
+      if (
+        options &&
+        (session.time.archived === undefined ||
+          session.time.archived >= options.archivedBefore ||
+          session.time.updated >= options.archivedBefore)
+      )
+        return
       try {
         // `remove` needs to work in all cases, such as broken sessions that
         // run cleanup without instance state.
@@ -617,11 +627,22 @@ const layer: Layer.Layer<
 
         if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
         const kids = yield* children(sessionID)
+        if (options?.requireLeaf && kids.length > 0) return
         for (const child of kids) {
           yield* remove(child.id)
         }
 
-        yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+        yield* events.publish(
+          SessionV1.Event.Deleted,
+          { sessionID, info: session },
+          {
+            ...(options ? { metadata: { sessionCleanup: { archivedBefore: options.archivedBefore } } } : {}),
+            location: {
+              directory: AbsolutePath.make(session.directory),
+              ...(session.workspaceID ? { workspaceID: session.workspaceID } : {}),
+            },
+          },
+        )
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
