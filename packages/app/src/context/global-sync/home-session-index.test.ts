@@ -149,6 +149,7 @@ describe("Home V2 session index", () => {
     expect(homeSessionIndexRefresh("server.connected", false)).toEqual({ connected: true, refetch: false })
     expect(homeSessionIndexRefresh("server.connected", true)).toEqual({ connected: true, refetch: true })
     expect(homeSessionIndexRefresh("global.disposed", true).refetch).toBe(true)
+    expect(homeSessionIndexRefresh("session.deleted", true).refetch).toBe(true)
     expect(homeSessionIndexRefresh("session.next.moved", true).refetch).toBe(true)
   })
 })

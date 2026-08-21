@@ -1605,6 +1605,18 @@ describe("server session", () => {
     expect(ctx.get).toEqual([])
   })
 
+  test("reparents loaded children when their parent is deleted", () => {
+    const ctx = setup({})
+    ctx.store.apply({ type: "session.created", properties: { info: session("root") } })
+    ctx.store.apply({ type: "session.created", properties: { info: session("parent", "root") } })
+    ctx.store.apply({ type: "session.created", properties: { info: session("child", "parent") } })
+
+    ctx.store.apply({ type: "session.deleted", properties: { info: session("parent", "root") } })
+
+    expect(ctx.store.get("parent")).toBeUndefined()
+    expect(ctx.store.get("child")?.parentID).toBe("root")
+  })
+
   test("preserves pinned session content under server-wide cache pressure", () => {
     const ctx = setup({})
     ctx.store.pin("active")

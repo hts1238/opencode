@@ -1013,7 +1013,14 @@ export function createServerSession(
         infoSeen.delete(sessionID)
         setData(
           "info",
-          produce((draft) => void delete draft[sessionID]),
+          produce((draft) => {
+            delete draft[sessionID]
+            for (const child of Object.values(draft)) {
+              if (!child) continue
+              if (child.parentID === sessionID)
+                child.parentID = properties.info?.parentID === child.id ? undefined : properties.info?.parentID
+            }
+          }),
         )
         evict([sessionID])
         return

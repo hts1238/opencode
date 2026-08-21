@@ -449,10 +449,7 @@ export interface Interface {
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
-  readonly remove: (
-    sessionID: SessionID,
-    options?: { archivedBefore: number; requireLeaf: true },
-  ) => Effect.Effect<void, NotFound>
+  readonly remove: (sessionID: SessionID, options?: { archivedBefore: number }) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -626,11 +623,7 @@ const layer: Layer.Layer<
         )
 
         if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-        const kids = yield* children(sessionID)
-        if (options?.requireLeaf && kids.length > 0) return
-        for (const child of kids) {
-          yield* remove(child.id)
-        }
+        if (!options) for (const child of yield* children(sessionID)) yield* remove(child.id)
 
         yield* events.publish(
           SessionV1.Event.Deleted,

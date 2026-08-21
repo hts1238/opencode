@@ -42,8 +42,8 @@ const layer = Layer.effect(
               .from(SessionTable)
               .all()
               .pipe(Effect.orDie)
-            const removed = yield* Effect.forEach(removalOrder(rows, cutoff), (sessionID) =>
-              sessions.remove(sessionID, { requireLeaf: true, archivedBefore: cutoff }).pipe(
+            const removed = yield* Effect.forEach(retentionOrder(rows, cutoff), (sessionID) =>
+              sessions.remove(sessionID, { archivedBefore: cutoff }).pipe(
                 Effect.andThen(
                   sessions.get(sessionID).pipe(
                     Effect.as(false),
@@ -99,33 +99,26 @@ const scheduled = Layer.effectDiscard(
   }),
 )
 
-function removalOrder(rows: Row[], cutoff: number) {
+function retentionOrder(rows: Row[], cutoff: number) {
   const eligible = new Set(
     rows
       .filter((row) => row.time_archived !== null && row.time_archived < cutoff && row.time_updated < cutoff)
       .map((row) => row.id),
   )
   const children = rows.reduce((result, row) => {
-    if (!row.parent_id) return result
+    if (!row.parent_id || !eligible.has(row.id) || !eligible.has(row.parent_id)) return result
     result.set(row.parent_id, [...(result.get(row.parent_id) ?? []), row.id])
     return result
   }, new Map<Row["id"], Row["id"][]>())
-  const memo = new Map<Row["id"], boolean>()
-  const visiting = new Set<Row["id"]>()
 
-  const removable = (id: Row["id"]): boolean => {
-    if (memo.has(id)) return memo.get(id) ?? false
-    if (!eligible.has(id) || visiting.has(id)) return false
-    visiting.add(id)
-    const result = (children.get(id) ?? []).every(removable)
-    visiting.delete(id)
-    memo.set(id, result)
-    return result
+  const visited = new Set<Row["id"]>()
+  const postorder = (id: Row["id"]): Row["id"][] => {
+    if (visited.has(id)) return []
+    visited.add(id)
+    return [...(children.get(id) ?? []).flatMap(postorder), id]
   }
-
-  const postorder = (id: Row["id"]): Row["id"][] => [...(children.get(id) ?? []).flatMap(postorder), id]
   return rows
-    .filter((row) => removable(row.id) && (!row.parent_id || !removable(row.parent_id)))
+    .filter((row) => eligible.has(row.id) && (!row.parent_id || !eligible.has(row.parent_id)))
     .flatMap((row) => postorder(row.id))
 }
 

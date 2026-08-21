@@ -91,11 +91,12 @@ describe("SessionCleanup", () => {
     }),
   )
 
-  it.live("keeps an expired parent with an ineligible child", () =>
+  it.live("reparents an ineligible child before removing its expired parent", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const cleanup = yield* SessionCleanup.Service
       const database = yield* Database.Service
+      const events = yield* EventV2Bridge.Service
       const directory = yield* tmpdirScoped({ git: true })
       const now = yield* Clock.currentTimeMillis
       const records = yield* provideInstance(directory)(
@@ -123,11 +124,17 @@ describe("SessionCleanup", () => {
         }),
       )
 
-      expect(yield* cleanup.run()).toBe(1)
-      expect(yield* exists(sessions, records.parent.id)).toBe(true)
+      expect(yield* cleanup.run()).toBe(2)
+      expect(yield* exists(sessions, records.parent.id)).toBe(false)
       expect(yield* exists(sessions, records.activeChild.id)).toBe(true)
       expect(yield* exists(sessions, records.expiredChild.id)).toBe(false)
-      yield* sessions.remove(records.parent.id)
+      expect((yield* sessions.get(records.activeChild.id)).parentID).toBeUndefined()
+      yield* events.publish(Session.Event.Updated, {
+        sessionID: records.activeChild.id,
+        info: { ...(yield* sessions.get(records.activeChild.id)), parentID: records.parent.id },
+      })
+      expect((yield* sessions.get(records.activeChild.id)).parentID).toBeUndefined()
+      yield* sessions.remove(records.activeChild.id)
     }),
   )
 
@@ -161,7 +168,7 @@ describe("SessionCleanup", () => {
     }),
   )
 
-  it.live("aborts retention deletion when a child appears after selection", () =>
+  it.live("aborts retention deletion when the parent changes after selection", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const events = yield* EventV2Bridge.Service
@@ -179,6 +186,7 @@ describe("SessionCleanup", () => {
         .pipe(Effect.orDie)
       const selected = yield* sessions.get(parent.id)
       const child = yield* provideInstance(directory)(sessions.create({ title: "new child", parentID: parent.id }))
+      yield* sessions.touch(parent.id)
 
       const deleted = yield* provideInstance(directory)(
         events.publish(
@@ -190,6 +198,7 @@ describe("SessionCleanup", () => {
       expect(Exit.isFailure(deleted)).toBe(true)
       expect(yield* exists(sessions, parent.id)).toBe(true)
       expect(yield* exists(sessions, child.id)).toBe(true)
+      expect((yield* sessions.get(child.id)).parentID).toBe(parent.id)
       yield* sessions.remove(parent.id)
     }),
   )

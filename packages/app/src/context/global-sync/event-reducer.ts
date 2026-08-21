@@ -183,17 +183,19 @@ export function applyDirectoryEvent(input: {
       if (!sessionID) break
       const result = Binary.search(input.store.session, sessionID, (s) => s.id)
       const info = properties.info ?? (result.found ? input.store.session[result.index] : undefined)
-      if (result.found) {
-        input.setStore(
-          "session",
-          produce((draft) => {
-            draft.splice(result.index, 1)
-          }),
-        )
-      }
+      const promoted = input.store.session.filter((session) => session.parentID === sessionID).length
+      input.setStore(
+        "session",
+        produce((draft) => {
+          if (result.found) draft.splice(result.index, 1)
+          for (const child of draft) {
+            if (child.parentID === sessionID) child.parentID = info?.parentID === child.id ? undefined : info?.parentID
+          }
+        }),
+      )
       cleanupSessionCaches(input.setStore, sessionID, input.setSessionTodo)
       if (info?.parentID) break
-      input.setStore("sessionTotal", (value) => Math.max(0, value - 1))
+      input.setStore("sessionTotal", (value) => Math.max(0, value - 1 + promoted))
       break
     }
     case "session.renamed": {

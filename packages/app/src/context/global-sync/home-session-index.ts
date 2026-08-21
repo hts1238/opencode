@@ -77,7 +77,7 @@ export function homeSessionIndexRefresh(event: Event["type"], connected: boolean
   if (event === "server.connected") return { connected: true, refetch: connected }
   return {
     connected,
-    refetch: event === "global.disposed" || event === "session.next.moved",
+    refetch: event === "global.disposed" || event === "session.deleted" || event === "session.next.moved",
   }
 }
 

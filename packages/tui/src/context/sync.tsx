@@ -266,14 +266,17 @@ export const {
 
         case "session.deleted": {
           const result = search(store.session, event.properties.info.id, (s) => s.id)
-          if (result.found) {
-            setStore(
-              "session",
-              produce((draft) => {
-                draft.splice(result.index, 1)
-              }),
-            )
-          }
+          setStore(
+            "session",
+            produce((draft) => {
+              if (result.found) draft.splice(result.index, 1)
+              for (const child of draft) {
+                if (child.parentID === event.properties.info.id)
+                  child.parentID =
+                    event.properties.info.parentID === child.id ? undefined : event.properties.info.parentID
+              }
+            }),
+          )
           break
         }
         case "session.updated": {
