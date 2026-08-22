@@ -623,7 +623,8 @@ const layer: Layer.Layer<
         )
 
         if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-        if (!options) for (const child of yield* children(sessionID)) yield* remove(child.id)
+        const descendants = yield* children(sessionID)
+        if (!options) for (const child of descendants) yield* remove(child.id)
 
         yield* events.publish(
           SessionV1.Event.Deleted,
@@ -636,6 +637,7 @@ const layer: Layer.Layer<
             },
           },
         )
+        if (options) for (const child of descendants) yield* remove(child.id)
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })

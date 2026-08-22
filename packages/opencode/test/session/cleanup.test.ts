@@ -91,12 +91,11 @@ describe("SessionCleanup", () => {
     }),
   )
 
-  it.live("reparents an ineligible child before removing its expired parent", () =>
+  it.live("removes ineligible descendants with their expired parent", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const cleanup = yield* SessionCleanup.Service
       const database = yield* Database.Service
-      const events = yield* EventV2Bridge.Service
       const directory = yield* tmpdirScoped({ git: true })
       const now = yield* Clock.currentTimeMillis
       const records = yield* provideInstance(directory)(
@@ -126,15 +125,8 @@ describe("SessionCleanup", () => {
 
       expect(yield* cleanup.run()).toBe(2)
       expect(yield* exists(sessions, records.parent.id)).toBe(false)
-      expect(yield* exists(sessions, records.activeChild.id)).toBe(true)
+      expect(yield* exists(sessions, records.activeChild.id)).toBe(false)
       expect(yield* exists(sessions, records.expiredChild.id)).toBe(false)
-      expect((yield* sessions.get(records.activeChild.id)).parentID).toBeUndefined()
-      yield* events.publish(Session.Event.Updated, {
-        sessionID: records.activeChild.id,
-        info: { ...(yield* sessions.get(records.activeChild.id)), parentID: records.parent.id },
-      })
-      expect((yield* sessions.get(records.activeChild.id)).parentID).toBeUndefined()
-      yield* sessions.remove(records.activeChild.id)
     }),
   )
 
@@ -165,6 +157,31 @@ describe("SessionCleanup", () => {
           .get()
           .pipe(Effect.orDie),
       ).toBeUndefined()
+    }),
+  )
+
+  it.live("removes a subagent whose original parent no longer exists", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const cleanup = yield* SessionCleanup.Service
+      const database = yield* Database.Service
+      const directory = yield* tmpdirScoped({ git: true })
+      const records = yield* provideInstance(directory)(
+        Effect.gen(function* () {
+          const parent = yield* sessions.create({ title: "deleted parent" })
+          const child = yield* sessions.create({ title: "orphaned subagent", parentID: parent.id })
+          return { parent, child }
+        }),
+      )
+      yield* database.db.delete(SessionTable).where(eq(SessionTable.id, records.parent.id))
+      yield* database.db
+        .delete(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, records.parent.id))
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(yield* cleanup.run()).toBe(1)
+      expect(yield* exists(sessions, records.child.id)).toBe(false)
     }),
   )
 

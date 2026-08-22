@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, lt, or, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -46,7 +46,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     id: info.id,
     project_id: info.projectID,
     workspace_id: info.workspaceID ?? null,
-    parent_id: info.parentID ?? null,
+    parent_id: info.parentID,
     slug: info.slug,
     directory: info.directory,
     path: info.path,
@@ -73,32 +73,6 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
   }
-}
-
-function reparentChildren(
-  db: DatabaseService,
-  sessionID: typeof SessionTable.$inferSelect.id,
-  parentID: typeof SessionTable.$inferSelect.parent_id | undefined,
-) {
-  return Effect.gen(function* () {
-    const parent =
-      parentID && parentID !== sessionID
-        ? yield* db
-            .select({ id: SessionTable.id })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, parentID))
-            .get()
-            .pipe(Effect.orDie)
-        : undefined
-    yield* db
-      .update(SessionTable)
-      .set({
-        parent_id: parent ? sql`CASE WHEN ${SessionTable.id} = ${parent.id} THEN NULL ELSE ${parent.id} END` : null,
-      })
-      .where(eq(SessionTable.parent_id, sessionID))
-      .run()
-      .pipe(Effect.orDie)
-  })
 }
 
 function messageData(
@@ -246,18 +220,9 @@ const layer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
-        const parent =
-          event.data.info.parentID && event.data.info.parentID !== event.data.sessionID
-            ? yield* db
-                .select({ id: SessionTable.id })
-                .from(SessionTable)
-                .where(eq(SessionTable.id, event.data.info.parentID))
-                .get()
-                .pipe(Effect.orDie)
-            : undefined
         const stored = yield* db
           .insert(SessionTable)
-          .values({ ...sessionRow(event.data.info), parent_id: parent?.id ?? null })
+          .values(sessionRow(event.data.info))
           .onConflictDoNothing()
           .returning({ sessionID: SessionTable.id })
           .get()
@@ -274,23 +239,12 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
-      Effect.gen(function* () {
-        const parent =
-          event.data.info.parentID && event.data.info.parentID !== event.data.sessionID
-            ? yield* db
-                .select({ id: SessionTable.id })
-                .from(SessionTable)
-                .where(eq(SessionTable.id, event.data.info.parentID))
-                .get()
-                .pipe(Effect.orDie)
-            : undefined
-        yield* db
-          .update(SessionTable)
-          .set({ ...sessionRow(event.data.info), parent_id: parent?.id ?? null })
-          .where(eq(SessionTable.id, event.data.sessionID))
-          .run()
-          .pipe(Effect.orDie)
-      }),
+      db
+        .update(SessionTable)
+        .set(sessionRow(event.data.info))
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
@@ -312,30 +266,27 @@ const layer = Layer.effectDiscard(
       Effect.gen(function* () {
         const cutoff = retentionCutoff(event.metadata)
         if (cutoff === undefined) {
-          yield* reparentChildren(db, event.data.sessionID, event.data.info.parentID)
           yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
           return
         }
-        const current = yield* db
-          .select({
-            parentID: SessionTable.parent_id,
-            timeArchived: SessionTable.time_archived,
-            timeUpdated: SessionTable.time_updated,
-          })
+        yield* db
+          .delete(SessionTable)
+          .where(
+            and(
+              eq(SessionTable.id, event.data.sessionID),
+              lt(SessionTable.time_archived, cutoff),
+              lt(SessionTable.time_updated, cutoff),
+            ),
+          )
+          .run()
+          .pipe(Effect.orDie)
+        const remaining = yield* db
+          .select({ id: SessionTable.id })
           .from(SessionTable)
           .where(eq(SessionTable.id, event.data.sessionID))
           .get()
           .pipe(Effect.orDie)
-        if (
-          !current ||
-          current.timeArchived === null ||
-          current.timeArchived >= cutoff ||
-          current.timeUpdated >= cutoff ||
-          current.parentID !== (event.data.info.parentID ?? null)
-        )
-          return yield* Effect.die(new globalThis.Error("Session changed during retention cleanup"))
-        yield* reparentChildren(db, event.data.sessionID, current.parentID)
-        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+        if (remaining) yield* Effect.die(new globalThis.Error("Session changed during retention cleanup"))
       }),
     )
     yield* events.project(SessionV1.Event.MessageUpdated, (event) =>

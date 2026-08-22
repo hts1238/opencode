@@ -262,7 +262,7 @@ describe("applyDirectoryEvent", () => {
 
   test("cleans session caches when deleted and decrements only root totals", () => {
     const cases = [
-      { info: rootSession({ id: "ses_1" }), expectedTotal: 2, current: false },
+      { info: rootSession({ id: "ses_1" }), expectedTotal: 1, current: false },
       { info: rootSession({ id: "ses_2", parentID: "ses_1" }), expectedTotal: 2, current: true },
     ]
 
@@ -308,29 +308,6 @@ describe("applyDirectoryEvent", () => {
       expect(store.question[item.info.id]).toBeUndefined()
       expect(store.session_status[item.info.id]).toBeUndefined()
     }
-  })
-
-  test("reparents loaded children when their parent is deleted", () => {
-    const parent = rootSession({ id: "ses_1", parentID: "ses_0" })
-    const [store, setStore] = createStore(
-      baseState({
-        session: [rootSession({ id: "ses_0" }), parent, rootSession({ id: "ses_2", parentID: parent.id })],
-        sessionTotal: 1,
-      }),
-    )
-
-    applyDirectoryEvent({
-      event: { type: "session.deleted", properties: { info: parent } },
-      store,
-      setStore,
-      push() {},
-      directory: "/tmp",
-      loadLsp() {},
-    })
-
-    expect(store.session.find((session) => session.id === parent.id)).toBeUndefined()
-    expect(store.session.find((session) => session.id === "ses_2")?.parentID).toBe("ses_0")
-    expect(store.sessionTotal).toBe(1)
   })
 
   test("cleans caches for trimmed sessions on session.created", () => {

@@ -54,7 +54,29 @@ const layer = Layer.effect(
                 Effect.catchCause(() => Effect.succeed(false)),
               ),
             )
-            const count = removed.filter(Boolean).length
+            const orphaned = yield* database.db
+              .all<{ id: Row["id"] }>(sql`
+                SELECT DISTINCT session.id
+                FROM session
+                INNER JOIN event
+                  ON event.aggregate_id = session.id
+                  AND event.type = 'session.created.1'
+                WHERE json_extract(event.data, '$.info.parentID') IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM session AS parent
+                    WHERE parent.id = json_extract(event.data, '$.info.parentID')
+                  )
+              `)
+              .pipe(Effect.orDie)
+            const removedOrphans = yield* Effect.forEach(orphaned, (row) =>
+              sessions.remove(row.id).pipe(
+                Effect.as(true),
+                Effect.catchIf(NotFoundError.isInstance, () => Effect.succeed(false)),
+                Effect.catchCause(() => Effect.succeed(false)),
+              ),
+            )
+            const count = [...removed, ...removedOrphans].filter(Boolean).length
             yield* database.db
               .delete(EventSequenceTable)
               .where(
