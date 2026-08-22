@@ -185,6 +185,38 @@ describe("SessionCleanup", () => {
     }),
   )
 
+  it.live("removes a legacy task subagent missing its parent metadata", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const cleanup = yield* SessionCleanup.Service
+      const database = yield* Database.Service
+      const directory = yield* tmpdirScoped({ git: true })
+      const records = yield* provideInstance(directory)(
+        Effect.gen(function* () {
+          const parent = yield* sessions.create({ title: "deleted parent" })
+          const child = yield* sessions.create({
+            title: "legacy task (@explore subagent)",
+            parentID: parent.id,
+            permission: [{ permission: "task", pattern: "*", action: "deny" }],
+          })
+          return { parent, child }
+        }),
+      )
+      yield* database.db.update(SessionTable).set({ parent_id: null }).where(eq(SessionTable.id, records.child.id))
+      yield* Effect.forEach([records.parent.id, records.child.id], (sessionID) =>
+        database.db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, sessionID))
+          .run()
+          .pipe(Effect.orDie),
+      )
+      yield* database.db.delete(SessionTable).where(eq(SessionTable.id, records.parent.id))
+
+      expect(yield* cleanup.run()).toBe(1)
+      expect(yield* exists(sessions, records.child.id)).toBe(false)
+    }),
+  )
+
   it.live("aborts retention deletion when the parent changes after selection", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

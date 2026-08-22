@@ -56,17 +56,29 @@ const layer = Layer.effect(
             )
             const orphaned = yield* database.db
               .all<{ id: Row["id"] }>(sql`
-                SELECT DISTINCT session.id
+                SELECT session.id
                 FROM session
-                INNER JOIN event
-                  ON event.aggregate_id = session.id
-                  AND event.type = 'session.created.1'
-                WHERE json_extract(event.data, '$.info.parentID') IS NOT NULL
-                  AND NOT EXISTS (
+                WHERE (
+                  session.parent_id IS NULL
+                  AND session.title GLOB '* (@* subagent)'
+                  AND EXISTS (
                     SELECT 1
-                    FROM session AS parent
-                    WHERE parent.id = json_extract(event.data, '$.info.parentID')
+                    FROM json_each(session.permission)
+                    WHERE json_extract(json_each.value, '$.permission') = 'task'
+                      AND json_extract(json_each.value, '$.action') = 'deny'
                   )
+                ) OR EXISTS (
+                  SELECT 1
+                  FROM event AS created
+                  WHERE created.aggregate_id = session.id
+                    AND created.type = 'session.created.1'
+                    AND json_extract(created.data, '$.info.parentID') IS NOT NULL
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM session AS parent
+                      WHERE parent.id = json_extract(created.data, '$.info.parentID')
+                    )
+                )
               `)
               .pipe(Effect.orDie)
             const removedOrphans = yield* Effect.forEach(orphaned, (row) =>
