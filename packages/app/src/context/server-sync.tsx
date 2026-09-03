@@ -546,7 +546,12 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
 
     if (event.current) session.applyV2(event.current)
     session.apply(event)
-    if (event.type === "session.created" || event.type === "session.updated" || event.type === "session.deleted") {
+    if (
+      event.type === "session.created" ||
+      event.type === "session.updated" ||
+      event.type === "session.deleted" ||
+      event.type === "session.renamed"
+    ) {
       homeSessions.apply(event)
     }
     homeSessions.refresh(event.type)

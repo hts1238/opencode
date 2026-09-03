@@ -19,6 +19,7 @@ export type Event =
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
   | EventSessionNextMoved
+  | EventSessionRenamed
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
   | EventSessionNextContextUpdated
@@ -850,6 +851,15 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.renamed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          title: string
+        }
+      }
+    | {
+        id: string
         type: "session.next.prompted"
         properties: {
           timestamp: number
@@ -1611,6 +1621,7 @@ export type GlobalEvent = {
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
     | SyncEventSessionNextMoved
+    | SyncEventSessionRenamed
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
     | SyncEventSessionNextContextUpdated
@@ -2769,6 +2780,7 @@ export type SessionDurableEvent =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
+  | SessionRenamed
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
@@ -2896,6 +2908,7 @@ export type V2Event =
   | SessionNextAgentSwitched
   | SessionNextModelSwitched
   | SessionNextMoved
+  | SessionRenamed
   | SessionNextPrompted
   | SessionNextPromptAdmitted
   | SessionNextContextUpdated
@@ -3374,6 +3387,22 @@ export type SyncEventSessionNextMoved = {
       sessionID: string
       location: LocationRef
       subdirectory?: string
+    }
+  }
+}
+
+export type SyncEventSessionRenamed = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.renamed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      title: string
     }
   }
 }
@@ -4248,6 +4277,25 @@ export type SessionNextMoved = {
     sessionID: string
     location: LocationRef
     subdirectory?: string
+  }
+}
+
+export type SessionRenamed = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  type: "session.renamed"
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  data: {
+    timestamp: number
+    sessionID: string
+    title: string
   }
 }
 
@@ -6307,6 +6355,16 @@ export type EventSessionNextMoved = {
     sessionID: string
     location: LocationRef
     subdirectory?: string
+  }
+}
+
+export type EventSessionRenamed = {
+  id: string
+  type: "session.renamed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    title: string
   }
 }
 
@@ -11791,6 +11849,43 @@ export type V2SessionSwitchModelResponses = {
 }
 
 export type V2SessionSwitchModelResponse = V2SessionSwitchModelResponses[keyof V2SessionSwitchModelResponses]
+
+export type V2SessionRenameData = {
+  body: {
+    title: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/rename"
+}
+
+export type V2SessionRenameErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+}
+
+export type V2SessionRenameError = V2SessionRenameErrors[keyof V2SessionRenameErrors]
+
+export type V2SessionRenameResponses = {
+  /**
+   * <No Content>
+   */
+  204: void
+}
+
+export type V2SessionRenameResponse = V2SessionRenameResponses[keyof V2SessionRenameResponses]
 
 export type V2SessionPromptData = {
   body: {

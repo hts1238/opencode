@@ -369,6 +369,34 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("renames a Session through the durable Session event", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+
+      yield* session.rename({ sessionID: created.id, title: "Renamed session" })
+
+      expect(yield* session.get(created.id)).toMatchObject({ title: "Renamed session" })
+      expect(
+        Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(1), Stream.runCollect)),
+      ).toMatchObject([{ type: "session.renamed", data: { title: "Renamed session" } }])
+    }),
+  )
+
+  it.effect("rejects a rename for a missing Session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const missing = SessionV2.ID.make("ses_missing_rename")
+
+      expect(
+        yield* session.rename({ sessionID: missing, title: "Missing" }).pipe(
+          Effect.flip,
+          Effect.map((error) => error._tag),
+        ),
+      ).toBe("Session.NotFoundError")
+    }),
+  )
+
   it.effect("ignores a model switch when the selected model is unchanged", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

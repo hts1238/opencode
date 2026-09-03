@@ -30,6 +30,22 @@ describe("adaptServerEvent", () => {
       current,
     })
   })
+
+  test("preserves the server timestamp when adapting a session rename", () => {
+    const current = {
+      id: "evt_rename",
+      created: 2,
+      type: "session.renamed",
+      durable: { aggregateID: "ses_1", seq: 1, version: 1 },
+      data: { sessionID: "ses_1", title: "Renamed" },
+    } as OpenCodeEvent
+
+    expect(adaptServerEvent(current)).toMatchObject({
+      type: "session.renamed",
+      properties: { sessionID: "ses_1", title: "Renamed", timestamp: 2 },
+      current,
+    })
+  })
 })
 
 describe("coalesceServerEvents", () => {

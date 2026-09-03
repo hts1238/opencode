@@ -98,4 +98,21 @@ export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(fun
   )
 })
 
+/** Returns the session's first projected user message. */
+export const firstUserMessage = Effect.fn("SessionHistory.firstUserMessage")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
+    .orderBy(asc(SessionMessageTable.seq))
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return undefined
+  const message = yield* decodeMessageRow(row).pipe(Effect.catch(() => Effect.succeed(undefined)))
+  return message?.type === "user" ? message : undefined
+})
+
 export * as SessionHistory from "./history"

@@ -5,10 +5,15 @@ import { pathKey } from "@/utils/path-key"
 
 export const HOME_V2_SESSION_PAGE_LIMIT = 5_000
 
-export type HomeSessionEvent = {
-  type: "session.created" | "session.updated" | "session.deleted"
-  properties: { sessionID: string; info: Session }
-}
+export type HomeSessionEvent =
+  | {
+      type: "session.created" | "session.updated" | "session.deleted"
+      properties: { sessionID: string; info: Session }
+    }
+  | {
+      type: "session.renamed"
+      properties: { sessionID: string; title: string; timestamp?: number }
+    }
 export type HomeSessionEvents = {
   sequence: number
   entries: Array<{ sequence: number; event: HomeSessionEvent }>
@@ -143,6 +148,17 @@ export function retainHomeSessions(sessions: Session[], limit: number, now: numb
 }
 
 export function applyHomeSessionEvent(sessions: Session[], event: HomeSessionEvent) {
+  if (event.type === "session.renamed") {
+    const index = sessions.findIndex((session) => session.id === event.properties.sessionID)
+    if (index === -1) return sessions
+    const session = sessions[index]
+    if (!session) return sessions
+    return sessions.with(index, {
+      ...session,
+      title: event.properties.title,
+      time: { ...session.time, updated: event.properties.timestamp ?? Date.now() },
+    })
+  }
   const info = event.properties.info
   const index = sessions.findIndex((session) => session.id === info.id)
   if (event.type === "session.deleted" || info.parentID || typeof info.time.archived === "number") {

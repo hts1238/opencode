@@ -675,12 +675,8 @@ export function MessageTimeline(props: {
     mutationFn: (input: { id: string; title: string }) =>
       sdk().api.session.rename({ sessionID: input.id, title: input.title }),
     onSuccess: (_, input) => {
-      sync().set(
-        produce((draft) => {
-          const index = draft.session.findIndex((s) => s.id === input.id)
-          if (index !== -1) draft.session[index].title = input.title
-        }),
-      )
+      const session = sync().session.get(input.id)
+      if (session) sync().session.remember({ ...session, title: input.title })
       setTitle("editing", false)
     },
     onError: (err) => {

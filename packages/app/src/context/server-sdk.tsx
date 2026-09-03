@@ -53,6 +53,13 @@ export function adaptServerEvent(event: OpenCodeEvent): ServerEvent {
     return { id: event.id, type: "question.replied", properties: event.data, current: event } as ServerEvent
   if (event.type === "question.v2.rejected")
     return { id: event.id, type: "question.rejected", properties: event.data, current: event } as ServerEvent
+  if (event.type === "session.renamed")
+    return {
+      id: event.id,
+      type: event.type,
+      properties: { timestamp: event.created, ...event.data },
+      current: event,
+    } as ServerEvent
   return { id: event.id, type: event.type, properties: event.data, current: event } as ServerEvent
 }
 

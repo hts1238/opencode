@@ -162,6 +162,19 @@ function setup(sessions: Record<string, Session>) {
 }
 
 describe("server session", () => {
+  test("applies a durable rename to the cached session", () => {
+    const ctx = setup({ child: session("child") })
+    ctx.store.remember(session("child"))
+
+    ctx.store.apply({
+      type: "session.renamed",
+      properties: { sessionID: "child", title: "Renamed", timestamp: 2 },
+    })
+
+    expect(ctx.store.get("child")?.title).toBe("Renamed")
+    expect(ctx.store.get("child")?.time.updated).toBe(2)
+  })
+
   test("projects V2 session events into current and legacy message state", () => {
     const ctx = setup({ child: session("child") })
     ctx.store.remember(session("child"))

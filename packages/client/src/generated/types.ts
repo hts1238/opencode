@@ -381,6 +381,13 @@ export type SessionsSwitchModelInput = {
 
 export type SessionsSwitchModelOutput = void
 
+export type SessionsRenameInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly title: { readonly title: string }["title"]
+}
+
+export type SessionsRenameOutput = void
+
 export type SessionsPromptInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly id?: {
@@ -722,6 +729,14 @@ export type SessionsHistoryOutput = {
           readonly location: { readonly directory: string; readonly workspaceID?: string }
           readonly subdirectory?: string
         }
+      }
+    | {
+        readonly id: string
+        readonly metadata?: { readonly [x: string]: JsonValue }
+        readonly type: "session.renamed"
+        readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+        readonly location?: { readonly directory: string; readonly workspaceID?: string }
+        readonly data: { readonly timestamp: number; readonly sessionID: string; readonly title: string }
       }
     | {
         readonly id: string
@@ -1180,6 +1195,14 @@ export type SessionsEventsOutput =
         readonly location: { readonly directory: string; readonly workspaceID?: string }
         readonly subdirectory?: string
       }
+    }
+  | {
+      readonly id: string
+      readonly metadata?: { readonly [x: string]: unknown }
+      readonly type: "session.renamed"
+      readonly durable?: { readonly aggregateID: string; readonly seq: number; readonly version: number }
+      readonly location?: { readonly directory: string; readonly workspaceID?: string }
+      readonly data: { readonly timestamp: number; readonly sessionID: string; readonly title: string }
     }
   | {
       readonly id: string

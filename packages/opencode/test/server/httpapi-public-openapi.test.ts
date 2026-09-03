@@ -138,6 +138,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
     for (const path of [
+      "/api/session/{sessionID}/rename",
       "/api/session/{sessionID}/prompt",
       "/api/session/{sessionID}/permission/{requestID}/reply",
       "/api/session/{sessionID}/question/{requestID}/reply",

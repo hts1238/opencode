@@ -630,6 +630,57 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("generates a title after the first successful provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      const { db } = yield* Database.Service
+      const stored = yield* db
+        .select({ created: SessionTable.time_created })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(
+          Effect.orDie,
+          Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die("session missing"))),
+        )
+      yield* db
+        .update(SessionTable)
+        .set({ title: `New session - ${new Date(stored.created).toISOString()}` })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* agents.transform((draft) =>
+        draft.update(AgentV2.ID.make("title"), (agent) => {
+          agent.mode = "primary"
+          agent.hidden = true
+          agent.system = "Generate a title."
+        }),
+      )
+      yield* session.prompt({ sessionID, prompt: Prompt.make({ text: "Name this session" }), resume: false })
+      responses = [
+        fragmentFixture("text", "text-response", ["Assistant response"]).completeEvents,
+        [LLMEvent.textDelta({ id: "title", text: "Generated session title" })],
+      ]
+      requests.length = 0
+      const events = yield* EventV2.Service
+      const renamed = yield* events
+        .subscribe(SessionEvent.Renamed)
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+
+      yield* session.resume(sessionID)
+      yield* Fiber.join(renamed)
+
+      expect(requests).toHaveLength(2)
+      const titleRequest = requests[1]
+      if (!titleRequest) return yield* Effect.die("title request missing")
+      expect(userTexts(titleRequest)).toEqual(["Name this session"])
+      expect((yield* session.get(sessionID)).title).toBe("Generated session title")
+    }),
+  )
+
   it.effect("streams one request with registry definitions from chronological V2 user history", () =>
     Effect.gen(function* () {
       yield* setup

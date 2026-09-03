@@ -944,8 +944,6 @@ export function createServerSession(
     }
 
     const info = data.info[sessionID]
-    if (event.type === "session.renamed" && info)
-      remember({ ...info, title: event.data.title, time: { ...info.time, updated: event.created } })
     if (event.type === "session.moved" && info)
       remember({
         ...info,
@@ -997,6 +995,17 @@ export function createServerSession(
         void resolve(eventID).catch(() => {})
     }
     switch (event.type) {
+      case "session.renamed": {
+        const properties = event.properties as { sessionID: string; title: string; timestamp?: number }
+        const info = data.info[properties.sessionID]
+        if (info)
+          remember({
+            ...info,
+            title: properties.title,
+            time: { ...info.time, updated: properties.timestamp ?? Date.now() },
+          })
+        return
+      }
       case "session.created":
         remember((event.properties as { info: Session }).info)
         return

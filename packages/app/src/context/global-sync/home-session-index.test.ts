@@ -121,12 +121,18 @@ describe("Home V2 session index", () => {
       type: "session.created",
       properties: { sessionID: created.id, info: created },
     })
+    const afterRename = applyHomeSessionEvent(afterCreate, {
+      type: "session.renamed",
+      properties: { sessionID: created.id, title: "renamed", timestamp: 3 },
+    })
+    expect(afterRename.find((item) => item.id === created.id)?.title).toBe("renamed")
+    expect(afterRename.find((item) => item.id === created.id)?.time.updated).toBe(3)
     expect(
-      applyHomeSessionEvent(afterCreate, {
+      applyHomeSessionEvent(afterRename, {
         type: "session.deleted",
         properties: { sessionID: initial[0]!.id, info: initial[0]! },
       }),
-    ).toEqual([created])
+    ).toEqual([expect.objectContaining({ id: created.id, title: "renamed" })])
   })
 
   test("applies only events newer than the index baseline", () => {
@@ -150,5 +156,6 @@ describe("Home V2 session index", () => {
     expect(homeSessionIndexRefresh("server.connected", true)).toEqual({ connected: true, refetch: true })
     expect(homeSessionIndexRefresh("global.disposed", true).refetch).toBe(true)
     expect(homeSessionIndexRefresh("session.next.moved", true).refetch).toBe(true)
+    expect(homeSessionIndexRefresh("session.renamed", true).refetch).toBe(false)
   })
 })

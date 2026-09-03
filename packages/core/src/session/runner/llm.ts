@@ -31,6 +31,7 @@ import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { SessionTitle } from "../title"
 import { type RunError, Service } from "./index"
 import { SessionRunnerModel } from "./model"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -80,7 +81,8 @@ import { llmClient } from "../../effect/app-node-platform"
  * - Post-run maintenance
  *   - [ ] Settle final status and expose durable output events to replayable consumers.
  *   - [ ] Coalesce streamed deltas and add covering projected-history indexes.
- *   - [ ] Update title, summaries, compaction state, and cleanup in bounded background work.
+ *   - [x] Generate the title in bounded background work.
+ *   - [ ] Update summaries, compaction state, and cleanup in bounded background work.
  *
  * Use `llm.stream(request)` for each provider turn. Keep tool execution and continuation here.
  * Durable continuation recovery remains a separate future slice with an explicit retry policy.
@@ -107,6 +109,23 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const db = (yield* Database.Service).db
     const compaction = SessionCompaction.make({ events, llm, config: yield* config.entries() })
+    const title = yield* SessionTitle.Service
+    const titlesRunning = new Set<SessionSchema.ID>()
+    const forkTitle = yield* FiberSet.makeRuntime<never, void, never>()
+    const startTitle = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+      if (titlesRunning.has(sessionID)) return
+      titlesRunning.add(sessionID)
+      forkTitle(
+        title.generateForFirstPrompt(sessionID).pipe(
+          Effect.ignore,
+          Effect.ensuring(
+            Effect.sync(() => {
+              titlesRunning.delete(sessionID)
+            }),
+          ),
+        ),
+      )
+    })
     const getSession = Effect.fn("SessionRunner.getSession")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
       if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
@@ -395,6 +414,7 @@ const layer = Layer.effect(
         let step = 1
         while (needsContinuation) {
           const result = yield* runTurn(input.sessionID, promotion, step)
+          if (result.step === 1) yield* startTitle(input.sessionID)
           needsContinuation = result.needsContinuation
           step = result.step + 1
           promotion = "steer"
@@ -420,6 +440,7 @@ export const node = makeLocationNode({
     AgentV2.node,
     ToolRegistry.node,
     SessionRunnerModel.node,
+    SessionTitle.node,
     SessionStore.node,
     Location.node,
     SystemContextRegistry.node,

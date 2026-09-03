@@ -120,6 +120,7 @@ test("session methods use the public HTTP contract", async () => {
     sessionID: "ses_test",
     model: { id: "claude", providerID: "anthropic" },
   })
+  await client.sessions.rename({ sessionID: "ses_test", title: "Renamed" })
   const admitted = await client.sessions.prompt({
     sessionID: "ses_test",
     prompt: { text: "Hello" },
@@ -153,6 +154,7 @@ test("session methods use the public HTTP contract", async () => {
     ["POST", "http://localhost:3000/api/session"],
     ["POST", "http://localhost:3000/api/session/ses_test/agent"],
     ["POST", "http://localhost:3000/api/session/ses_test/model"],
+    ["POST", "http://localhost:3000/api/session/ses_test/rename"],
     ["POST", "http://localhost:3000/api/session/ses_test/prompt"],
     ["POST", "http://localhost:3000/api/session/ses_test/compact"],
     ["POST", "http://localhost:3000/api/session/ses_test/wait"],
@@ -169,6 +171,9 @@ test("session methods use the public HTTP contract", async () => {
     prompt: { text: "Hello" },
     resume: false,
   })
+  const rename = requests.find((request) => request.url.endsWith("/api/session/ses_test/rename"))?.init?.body
+  if (typeof rename !== "string") throw new Error("Expected JSON request body")
+  expect(JSON.parse(rename)).toEqual({ title: "Renamed" })
 })
 
 test("middleware errors remain declared client errors", async () => {
