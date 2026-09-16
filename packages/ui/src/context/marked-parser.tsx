@@ -6,6 +6,15 @@ export function createMarkdownParser(highlight: (code: string, language: string)
   return new Marked(
     {
       renderer: {
+        paragraph({ tokens }) {
+          const title = tokens[0]
+          const next = tokens[1]
+          if (title?.type !== "strong" || title.raw.includes("\n")) return false
+          if (next?.type !== "text" || !/^[\t ]*\n/.test(next.raw)) return false
+
+          // Keep standalone bold lead-ins separate without changing ordinary soft breaks.
+          return `<p class="markdown-heading">${this.parser.parseInline([title])}</p>\n<p>${this.parser.parseInline(tokens.slice(1)).trimStart()}</p>\n`
+        },
         link({ href, title, text }) {
           const titleAttr = title ? ` title="${title}"` : ""
           return `<a href="${href}"${titleAttr} class="external-link" target="_blank" rel="noopener noreferrer">${text}</a>`

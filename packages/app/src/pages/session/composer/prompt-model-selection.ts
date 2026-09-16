@@ -23,7 +23,8 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
   const configured = () => {
     const value = sync().data.config.model
     if (!value) return
-    const [providerID, modelID] = value.split("/")
+    const [providerID, ...rest] = value.split("/")
+    const modelID = rest.join("/")
     const model = { providerID, modelID }
     if (valid(model)) return model
   }

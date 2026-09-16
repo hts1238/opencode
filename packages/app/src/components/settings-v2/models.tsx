@@ -1,16 +1,20 @@
 import { useFilteredList } from "@opencode-ai/ui/hooks"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
+import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { TextInputV2 } from "@opencode-ai/ui/v2/text-input-v2"
-import { type Component, For, Show } from "solid-js"
+import { createMemo, type Component, For, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useLanguage } from "@/context/language"
-import { useModels } from "@/context/models"
+import { type ModelKey, useModels } from "@/context/models"
 import { useServerSDK } from "@/context/server-sdk"
-import { popularProviders } from "@/hooks/use-providers"
+import { useServerSync } from "@/context/server-sync"
+import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { showToast } from "@/utils/toast"
 import { Persist, persisted } from "@/utils/persist"
+import { ModelSelectorPopoverV2 } from "../dialog-select-model"
 import { SettingsListV2 } from "./parts/list"
 import { SettingsRowV2 } from "./parts/row"
 import "./settings-v2.css"
@@ -19,14 +23,72 @@ type ModelItem = ReturnType<ReturnType<typeof useModels>["list"]>[number]
 
 const PROVIDER_ICON_SIZE = 16
 
+function parseConfigModel(value: string | undefined) {
+  if (!value) return
+  const [providerID, ...rest] = value.split("/")
+  const modelID = rest.join("/")
+  if (!providerID || !modelID) return
+  return { providerID, modelID }
+}
+
 export const SettingsModelsV2: Component = () => {
   const language = useLanguage()
   const models = useModels()
   const serverSdk = useServerSDK()
+  const serverSync = useServerSync()
+  const providers = useProviders(() => undefined)
   const [store, setStore] = persisted(
     Persist.serverGlobal(serverSdk().scope, "settings-v2.models.providers"),
     createStore({ collapsed: {} as Record<string, boolean> }),
   )
+
+  const configuredDefaultModel = createMemo(() => {
+    const model = parseConfigModel(serverSync().data.config.model)
+    if (!model) return
+    return models.find(model)
+  })
+
+  const currentDefaultModel = createMemo(() => {
+    const configured = configuredDefaultModel()
+    if (configured) return configured
+
+    const defaults = providers.default()
+    for (const provider of providers.connected()) {
+      const configuredModel = defaults[provider.id]
+      const found = configuredModel ? models.find({ providerID: provider.id, modelID: configuredModel }) : undefined
+      if (found) return found
+
+      const first = Object.values(provider.models)[0]
+      if (!first) continue
+      const fallback = models.find({ providerID: provider.id, modelID: first.id })
+      if (fallback) return fallback
+    }
+  })
+
+  const setDefaultModel = (model: ModelKey | undefined, options?: { recent?: boolean }) => {
+    if (!model) return
+    const before = serverSync().data.config.model
+    const next = `${model.providerID}/${model.modelID}`
+    serverSync().set("config", "model", next)
+    models.setVisibility(model, true)
+    if (options?.recent) models.recent.push(model)
+    void serverSync()
+      .updateConfig({ model: next })
+      .catch((err: unknown) => {
+        serverSync().set("config", "model", before)
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }
+
+  const defaultModelState = {
+    current: currentDefaultModel,
+    list: models.list,
+    set: setDefaultModel,
+    visible: models.visible,
+  }
 
   const list = useFilteredList<ModelItem>({
     items: (_filter) => models.list(),
@@ -81,6 +143,43 @@ export const SettingsModelsV2: Component = () => {
       </div>
 
       <div class="settings-v2-tab-body settings-v2-models">
+        <div class="settings-v2-section">
+          <h3 class="settings-v2-section-title">{language.t("settings.models.section.defaults")}</h3>
+          <SettingsListV2>
+            <SettingsRowV2
+              title={language.t("settings.models.defaultModel.title")}
+              description={language.t("settings.models.defaultModel.description")}
+            >
+              <ModelSelectorPopoverV2
+                model={defaultModelState}
+                trigger={(triggerProps) => (
+                  <ButtonV2
+                    {...triggerProps}
+                    type="button"
+                    variant="neutral"
+                    size="normal"
+                    class="group min-w-0 max-w-[260px]"
+                    data-action="settings-default-model"
+                  >
+                    <Show when={currentDefaultModel()?.provider.id}>
+                      <ProviderIcon
+                        id={currentDefaultModel()?.provider.id ?? ""}
+                        width={PROVIDER_ICON_SIZE}
+                        height={PROVIDER_ICON_SIZE}
+                        class="shrink-0 opacity-60 transition-opacity duration-150 group-hover:opacity-100"
+                      />
+                    </Show>
+                    <span class="truncate">
+                      {currentDefaultModel()?.name ?? language.t("settings.models.defaultModel.empty")}
+                    </span>
+                    <IconV2 name="chevron-down" size="small" class="shrink-0 text-v2-icon-icon-muted" />
+                  </ButtonV2>
+                )}
+              />
+            </SettingsRowV2>
+          </SettingsListV2>
+        </div>
+
         <Show
           when={!list.grouped.loading}
           fallback={

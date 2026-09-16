@@ -81,6 +81,14 @@
     margin-bottom: 12px;
   }
 
+  p.markdown-heading {
+    margin-block-end: 4px;
+
+    strong {
+      font-weight: 600;
+    }
+  }
+
   /* Links */
   a {
     color: var(--text-interactive-base);

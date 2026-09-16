@@ -452,15 +452,15 @@
   margin-top: 0;
 }
 
-.settings-v2-models [data-slot="settings-v2-row-description"]:empty {
+.settings-v2-models [data-component="settings-models-provider"] [data-slot="settings-v2-row-description"]:empty {
   display: none;
 }
 
-.settings-v2-models [data-slot="settings-v2-row-copy"] {
+.settings-v2-models [data-component="settings-models-provider"] [data-slot="settings-v2-row-copy"] {
   gap: 0;
 }
 
-.settings-v2-models [data-slot="settings-v2-row-title"] {
+.settings-v2-models [data-component="settings-models-provider"] [data-slot="settings-v2-row-title"] {
   min-width: 0;
   overflow: hidden;
   font-size: 13px;

@@ -151,7 +151,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const configuredModel = () => {
       const configured = sync().data.config.model
       if (!configured) return
-      const [providerID, modelID] = configured.split("/")
+      const [providerID, ...rest] = configured.split("/")
+      const modelID = rest.join("/")
       const model = { providerID, modelID }
       if (validModel(model)) return model
     }
