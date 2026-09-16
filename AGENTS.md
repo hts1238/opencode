@@ -4,6 +4,18 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Local Server Build
+
+- The startup script `/home/futau/opencode-start.sh` always launches `/home/futau/opencode/packages/opencode/dist/opencode-linux-x64/bin/opencode`.
+- When asked to build the local server or the binary used by the startup script, run this single command directly. Do not repeat startup-script, service, or binary-path research unless the command fails or the user says the setup changed:
+
+```bash
+env -u OPENCODE_RELEASE bun run --cwd /home/futau/opencode/packages/opencode build --single --skip-install
+```
+
+- This builds directly to the target file, embeds the current web UI, and runs a `--version` smoke test. No separate copy/install or app build is needed. Do not use `--skip-embed-web-ui`.
+- A build request does not authorize restarting the app or server. Leave the running process untouched.
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
