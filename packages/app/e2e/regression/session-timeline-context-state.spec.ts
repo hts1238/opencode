@@ -22,7 +22,11 @@ test("preserves a collapsed context group through count and status updates", asy
       ),
     ],
   })
-  const group = page.locator(`[data-timeline-part-ids="${ids.join(",")}"]`)
+  const steps = page.locator(
+    `[data-component="assistant-tool-group"][data-timeline-part-ids="${ids.join(",")}"]`,
+  )
+  await steps.locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]').click()
+  const group = page.locator(`.tool-collapsible[data-timeline-part-ids="${ids.join(",")}"]`)
   const trigger = group.locator('[data-slot="collapsible-trigger"]')
   await expect(trigger).toHaveAttribute("aria-expanded", "false")
   await timeline.send(partUpdated(toolPart(ids[0]!, "read", "completed", inputs.read)), 100)

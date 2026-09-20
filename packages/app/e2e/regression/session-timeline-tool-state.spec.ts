@@ -16,6 +16,7 @@ test("updates expanded web search links without resetting expansion", async ({ p
       assistantMessage([toolPart(searchID, "websearch", "completed", input, { output: "https://example.com/one" })]),
     ],
   })
+  await openSteps(page, searchID)
   const wrapper = page.locator(`[data-timeline-part-id="${searchID}"]`)
   const trigger = wrapper.locator('[data-slot="collapsible-trigger"]')
   await trigger.click()
@@ -36,6 +37,7 @@ test("preserves an expanded tool error card across duplicate delivery", async ({
   const toolID = "prt_duplicate_error"
   const failed = toolPart(toolID, "bash", "error", { command: "exit 1" }, { error: "Command failed visibly" })
   const timeline = await setupTimeline(page, { messages: [userMessage(), assistantMessage([failed])] })
+  await openSteps(page, toolID)
   const wrapper = page.locator(`[data-timeline-part-id="${toolID}"]`)
   const trigger = wrapper.locator('[data-slot="collapsible-trigger"]')
   await trigger.click()
@@ -75,3 +77,10 @@ test("renders multiple question answers and preserves open state on answer updat
   await expect(wrapper).toContainText("Updated")
   await expect(wrapper).toContainText("B, C")
 })
+
+async function openSteps(page: Parameters<typeof setupTimeline>[0], partID: string) {
+  await page
+    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
+    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+    .click()
+}

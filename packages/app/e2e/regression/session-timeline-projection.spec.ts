@@ -3,6 +3,7 @@ import {
   assistantMessage,
   setupTimeline,
   status,
+  textPart,
   toolPart,
   userMessage,
   userText,
@@ -48,22 +49,29 @@ test.describe("session timeline projection", () => {
     ]
     await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
 
+    const toolGroups = page.locator('[data-component="assistant-tool-group"]')
+    await expect(toolGroups).toHaveCount(3)
+    await expect(page.locator('[data-timeline-part-id="prt_task"]')).toBeVisible()
+    await expect(page.locator('[data-timeline-part-id="prt_question"]')).toBeVisible()
+    await expect(page.locator('[data-timeline-part-id="prt_bash"]')).toBeHidden()
+    for (const toolGroup of await toolGroups.all()) {
+      await toolGroup.getByRole("button", { name: "Show steps", exact: true }).click()
+    }
+
     await expect(
       page.locator('[data-timeline-part-ids="prt_01_read,prt_02_glob,prt_03_grep,prt_04_list"]'),
     ).toBeVisible()
     for (const id of [
       "prt_webfetch",
       "prt_websearch",
-      "prt_task",
       "prt_bash",
       "prt_edit",
       "prt_write",
       "prt_patch",
-      "prt_question",
       "prt_skill",
       "prt_custom",
     ]) {
-      await expect(page.locator(`[data-timeline-part-id="${id}"]`).first(), id).toBeVisible()
+      await expect(page.locator(`[data-timeline-part-id="${id}"]`), id).toBeVisible()
     }
     await expect(page.locator('[data-timeline-part-id="prt_todo"]')).toHaveCount(0)
   })
@@ -126,6 +134,25 @@ test.describe("session timeline projection", () => {
     await expect(page.getByText("Visible provider failure")).toBeVisible()
     await scroller.evaluate((element) => (element.scrollTop = element.scrollHeight))
     await expect(page.locator('[data-timeline-row="TurnGap"]')).toBeVisible()
+  })
+
+  test("keeps a compaction summary in its own collapsed block", async ({ page }) => {
+    await setupTimeline(page, {
+      messages: [
+        userMessage(),
+        assistantMessage([textPart("prt_compaction_summary", "Long compacted context")], {
+          id: "msg_1001_compaction_summary",
+          summary: true,
+        }),
+      ],
+    })
+
+    const compaction = page.getByRole("button", { name: "Session compacted", exact: true })
+    await expect(compaction).toHaveAttribute("aria-expanded", "false")
+    await expect(page.getByText("Long compacted context", { exact: true })).toBeHidden()
+    await compaction.click()
+    await expect(compaction).toHaveAttribute("aria-expanded", "true")
+    await expect(page.getByText("Long compacted context", { exact: true })).toBeVisible()
   })
 
   test("renders comment strips and historical diff summary overflow", async ({ page }) => {

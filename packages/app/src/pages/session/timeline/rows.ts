@@ -19,6 +19,8 @@ export type TimelineRowMap = {
   TurnDivider: {
     userMessageID: string
     label: "compaction" | "interrupted"
+    id?: string
+    summary?: string
   }
   AssistantPart: {
     userMessageID: string
@@ -28,6 +30,12 @@ export type TimelineRowMap = {
   AssistantPreamble: {
     userMessageID: string
     groups: PartGroup[]
+    previousAssistantPart: boolean
+  }
+  AssistantToolGroup: {
+    userMessageID: string
+    groups: PartGroup[]
+    previousAssistantPart: boolean
   }
   Thinking: { userMessageID: string; reasoningHeading?: string }
   Retry: { userMessageID: string }
@@ -45,41 +53,63 @@ export namespace Timeline {
     inlineComments: boolean,
     projectedUserMessages: UserMessage[],
   ) {
-    const turns: { user: UserMessage; assistants: AssistantMessage[] }[] = []
+    type Compaction = Extract<SessionMessageInfo, { type: "compaction" }>
+    const turns: {
+      user: UserMessage
+      assistants: AssistantMessage[]
+      compactions: { message: Compaction; afterAssistant: number }[]
+    }[] = []
     const turnByUserID = new Map<string, (typeof turns)[number]>()
+    let currentTurn: (typeof turns)[number] | undefined
     messages.forEach((message) => {
       const projected = getMessage(message.id)
       if (message.type === "shell" && projected?.role === "user") {
         const assistant = getMessage(`${message.id}:assistant`)
-        const turn = { user: projected, assistants: assistant?.role === "assistant" ? [assistant] : [] }
+        const turn = {
+          user: projected,
+          assistants: assistant?.role === "assistant" ? [assistant] : [],
+          compactions: [],
+        }
         turns.push(turn)
         turnByUserID.set(projected.id, turn)
+        currentTurn = undefined
         return
       }
       if (projected?.role === "user") {
-        if (turnByUserID.has(projected.id)) return
-        const turn = { user: projected, assistants: [] }
+        const existing = turnByUserID.get(projected.id)
+        if (existing) {
+          currentTurn = existing
+          return
+        }
+        const turn = { user: projected, assistants: [], compactions: [] }
         turns.push(turn)
         turnByUserID.set(projected.id, turn)
+        currentTurn = turn
         return
       }
-      if (projected?.role !== "assistant") return
+      if (projected?.role !== "assistant") {
+        if (message.type === "compaction")
+          currentTurn?.compactions.push({ message, afterAssistant: currentTurn.assistants.length })
+        return
+      }
       const existing = turnByUserID.get(projected.parentID)
       if (existing) {
         existing.assistants.push(projected)
+        currentTurn = existing
         return
       }
       const user = getMessage(projected.parentID)
       if (user?.role !== "user") return
-      const turn = { user, assistants: [projected] }
+      const turn = { user, assistants: [projected], compactions: [] }
       turns.push(turn)
       turnByUserID.set(user.id, turn)
+      currentTurn = turn
     })
     const latestUserMessageID = turns.at(-1)?.user.id
     projectedUserMessages.forEach((user) => {
       if (turnByUserID.has(user.id)) return
       if (latestUserMessageID && user.id < latestUserMessageID) return
-      const turn = { user, assistants: [] }
+      const turn = { user, assistants: [], compactions: [] }
       turns.push(turn)
       turnByUserID.set(user.id, turn)
     })
@@ -91,6 +121,7 @@ export namespace Timeline {
           turn.user,
           getMessageParts,
           turn.assistants,
+          turn.compactions,
           index,
           showReasoning,
           status,
@@ -105,6 +136,10 @@ export namespace Timeline {
     userMessage: UserMessage,
     getMessageParts: (messageID: string) => Part[],
     assistantMessages: AssistantMessage[],
+    currentCompactions: {
+      message: Extract<SessionMessageInfo, { type: "compaction" }>
+      afterAssistant: number
+    }[],
     index: number,
     showReasoning: boolean,
     status: SessionStatus["type"],
@@ -117,35 +152,54 @@ export namespace Timeline {
     const previousUserMessage = index > 0
     const userParts = getMessageParts(userMessage.id)
     const comments = userParts.flatMap((p) => MessageComment.fromPart(p) ?? [])
-    const compaction = userParts.some((p) => p.type === "compaction")
-    const interruptedMessageIndex = assistantMessages.findIndex((m) => m.error?.name === "MessageAbortedError")
+    const compactionParts = userParts.filter((part) => part.type === "compaction")
+    const summaryMessages = assistantMessages.filter((message) => message.summary)
+    const compactions = currentCompactions.length
+      ? currentCompactions.flatMap(({ message, afterAssistant }) =>
+          "status" in message && message.status === "failed"
+            ? []
+            : [
+                {
+                  id: message.id,
+                  summary: "summary" in message && typeof message.summary === "string" ? message.summary : "",
+                  afterAssistant: assistantMessages.slice(0, afterAssistant).filter((item) => !item.summary).length,
+                },
+              ],
+        )
+      : [
+          ...summaryMessages.map((message, summaryIndex) => {
+            const messageIndex = assistantMessages.indexOf(message)
+            return {
+              id: compactionParts[summaryIndex]?.id ?? message.id,
+              summary: getMessageParts(message.id)
+                .flatMap((part) => (part.type === "text" && part.text.trim() ? [part.text] : []))
+                .join("\n\n"),
+              afterAssistant: assistantMessages.slice(0, messageIndex).filter((item) => !item.summary).length,
+            }
+          }),
+          ...compactionParts.slice(summaryMessages.length).map((part) => ({
+            id: part.id,
+            summary: "",
+            afterAssistant: 0,
+          })),
+        ]
+    const contentMessages = assistantMessages.filter((message) => !message.summary)
+    const interruptedMessageIndex = contentMessages.findIndex((m) => m.error?.name === "MessageAbortedError")
     const interrupted = interruptedMessageIndex !== -1
     const latestError = assistantMessages.at(-1)?.error
     const error = latestError?.name === "MessageAbortedError" ? undefined : latestError
 
-    const assistantPartRefs = assistantMessages.flatMap((message, messageIndex) =>
+    const assistantPartRefs = contentMessages.flatMap((message, messageIndex) =>
       getMessageParts(message.id)
-        .filter((part) => renderable(part, showReasoning))
+        .filter((part) => renderable(part, true))
         .map((part) => ({ messageID: message.id, messageIndex, part })),
     )
-    const assistantItems =
-      interrupted && !compaction
-        ? [
-            ...groupParts(assistantPartRefs.filter((ref) => ref.messageIndex <= interruptedMessageIndex)).map(
-              (group) => ({
-                type: "part" as const,
-                group,
-              }),
-            ),
-            { type: "interrupted" as const },
-            ...groupParts(assistantPartRefs.filter((ref) => ref.messageIndex > interruptedMessageIndex)).map(
-              (group) => ({
-                type: "part" as const,
-                group,
-              }),
-            ),
-          ]
-        : groupParts(assistantPartRefs).map((group) => ({ type: "part" as const, group }))
+    const assistantCompaction = assistantPartRefs.some((ref) => ref.part.type === "compaction")
+    const assistantItems = orderedAssistantItems(
+      assistantPartRefs,
+      compactions,
+      interrupted && compactions.length === 0 && !assistantCompaction ? interruptedMessageIndex + 1 : undefined,
+    )
     if (previousUserMessage) rows.push(new TimelineRow.TurnGap({ userMessageID: userMessage.id }))
 
     if (comments.length > 0 && !inlineComments)
@@ -162,32 +216,9 @@ export namespace Timeline {
       }),
     )
 
-    if (compaction) {
-      rows.push(
-        new TimelineRow.TurnDivider({
-          userMessageID: userMessage.id,
-          label: "compaction",
-        }),
-      )
-    }
-
     const finalTextIndex = finalAssistantTextIndex(assistantItems, assistantPartRefs)
-    const preambleItems = finalTextIndex > 0 ? assistantItems.slice(0, finalTextIndex) : []
-    const preambleGroups = preambleItems.flatMap((item) => (item.type === "part" ? [item.group] : []))
-    const canCollapsePreamble = preambleItems.length > 0 && preambleGroups.length === preambleItems.length
-    const responseItems = canCollapsePreamble ? assistantItems.slice(finalTextIndex) : assistantItems
-
-    if (canCollapsePreamble) {
-      rows.push(
-        new TimelineRow.AssistantPreamble({
-          userMessageID: userMessage.id,
-          groups: preambleGroups,
-        }),
-      )
-    }
-
-    let assistantGroupIndex = canCollapsePreamble ? 1 : 0
-    responseItems.forEach((item) => {
+    let assistantGroupIndex = 0
+    assistantSections(assistantItems, assistantPartRefs, finalTextIndex, showReasoning).forEach((item) => {
       if (item.type === "interrupted") {
         rows.push(
           new TimelineRow.TurnDivider({
@@ -195,6 +226,42 @@ export namespace Timeline {
             label: "interrupted",
           }),
         )
+        return
+      }
+
+      if (item.type === "preamble") {
+        rows.push(
+          new TimelineRow.AssistantPreamble({
+            userMessageID: userMessage.id,
+            groups: item.groups,
+            previousAssistantPart: assistantGroupIndex > 0,
+          }),
+        )
+        assistantGroupIndex += 1
+        return
+      }
+
+      if (item.type === "compaction") {
+        rows.push(
+          new TimelineRow.TurnDivider({
+            userMessageID: userMessage.id,
+            label: "compaction",
+            id: item.id,
+            summary: item.summary,
+          }),
+        )
+        return
+      }
+
+      if (item.type === "tools") {
+        rows.push(
+          new TimelineRow.AssistantToolGroup({
+            userMessageID: userMessage.id,
+            groups: item.groups,
+            previousAssistantPart: assistantGroupIndex > 0,
+          }),
+        )
+        assistantGroupIndex += 1
         return
       }
 
@@ -250,7 +317,11 @@ export namespace Timeline {
   }
 
   function finalAssistantTextIndex(
-    items: Array<{ type: "part"; group: PartGroup } | { type: "interrupted" }>,
+    items: Array<
+      | { type: "part"; group: PartGroup }
+      | { type: "interrupted" }
+      | { type: "compaction"; id: string; summary: string }
+    >,
     refs: Array<{ messageID: string; part: Part }>,
   ) {
     for (let index = items.length - 1; index >= 0; index--) {
@@ -261,12 +332,116 @@ export namespace Timeline {
     return -1
   }
 
-  function assistantGroupTextPart(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
-    if (group.type !== "part") return false
-    return (
-      refs.find((ref) => ref.messageID === group.ref.messageID && ref.part.id === group.ref.partID)?.part?.type ===
-      "text"
+  function orderedAssistantItems(
+    refs: Array<{ messageID: string; messageIndex: number; part: Part }>,
+    compactions: { id: string; summary: string; afterAssistant: number }[],
+    interruption?: number,
+  ) {
+    const markers = [
+      ...compactions.map((compaction) => ({
+        afterAssistant: compaction.afterAssistant,
+        item: { type: "compaction" as const, id: compaction.id, summary: compaction.summary },
+      })),
+      ...(interruption === undefined
+        ? []
+        : [{ afterAssistant: interruption, item: { type: "interrupted" as const } }]),
+    ].sort((a, b) => a.afterAssistant - b.afterAssistant)
+    const result: Array<
+      | { type: "part"; group: PartGroup }
+      | { type: "interrupted" }
+      | { type: "compaction"; id: string; summary: string }
+    > = []
+    let start = 0
+
+    markers.forEach((marker) => {
+      result.push(
+        ...groupParts(refs.filter((ref) => ref.messageIndex >= start && ref.messageIndex < marker.afterAssistant)).map(
+          (group) => ({ type: "part" as const, group }),
+        ),
+        marker.item,
+      )
+      start = marker.afterAssistant
+    })
+    result.push(
+      ...groupParts(refs.filter((ref) => ref.messageIndex >= start)).map((group) => ({ type: "part" as const, group })),
     )
+    return result
+  }
+
+  function assistantSections(
+    items: Array<
+      | { type: "part"; group: PartGroup }
+      | { type: "interrupted" }
+      | { type: "compaction"; id: string; summary: string }
+    >,
+    refs: Array<{ messageID: string; part: Part }>,
+    finalTextIndex: number,
+    showReasoning: boolean,
+  ) {
+    type Section =
+      | { type: "part"; group: PartGroup }
+      | { type: "interrupted" }
+      | { type: "preamble"; groups: PartGroup[] }
+      | { type: "tools"; groups: PartGroup[] }
+      | { type: "compaction"; id: string; summary: string }
+      | { type: "boundary" }
+    const result: Section[] = []
+    const collapsePreamble =
+      finalTextIndex > 0 && !items.slice(0, finalTextIndex).some((item) => item.type === "interrupted")
+
+    items.forEach((item, index) => {
+      if (item.type === "interrupted") {
+        result.push(item)
+        return
+      }
+      if (item.type === "compaction") {
+        result.push(item)
+        return
+      }
+
+      const part = assistantGroupPart(item.group, refs)
+      if (part?.type === "compaction") {
+        result.push({ type: "compaction", id: part.id, summary: "" })
+        return
+      }
+      if (part?.type === "reasoning" && !showReasoning) {
+        result.push({ type: "boundary" })
+        return
+      }
+
+      const type = isLowLevelToolGroup(item.group, refs)
+        ? "tools"
+        : collapsePreamble && index < finalTextIndex && part?.type !== "tool"
+          ? "preamble"
+          : "part"
+      const previous = result.at(-1)
+      if (type === "part") {
+        result.push(item)
+        return
+      }
+      if (previous?.type === type) {
+        previous.groups.push(item.group)
+        return
+      }
+      result.push({ type, groups: [item.group] })
+    })
+
+    return result.filter((item): item is Exclude<Section, { type: "boundary" }> => item.type !== "boundary")
+  }
+
+  function isLowLevelToolGroup(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
+    const part = assistantGroupPart(group, refs)
+    return part?.type === "tool" && part.tool !== "task" && part.tool !== "question"
+  }
+
+  function assistantGroupPart(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
+    const ref = group.type === "part" ? group.ref : group.refs[0]
+    if (!ref) return
+    return refs.find((item) => item.messageID === ref.messageID && item.part.id === ref.partID)?.part
+  }
+
+  function assistantGroupTextPart(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
+    return assistantGroupPart(group, refs)?.type === "text"
   }
 
   function reasoningHeading(text: string) {

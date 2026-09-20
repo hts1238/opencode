@@ -19,6 +19,7 @@ for (const expanded of [false, true]) {
       messages: [userMessage(), assistantMessage([shell(id, "completed", lines(3))])],
       settings: { shellToolPartsExpanded: expanded },
     })
+    await openSteps(page, id)
     const trigger = page.locator(`[data-timeline-part-id="${id}"] [data-slot="collapsible-trigger"]`)
     await expect(trigger).toHaveAttribute("aria-expanded", String(expanded))
     await trigger.click()
@@ -40,6 +41,7 @@ test("shows and expands a running shell command without shimmering it", async ({
     settings: { shellToolPartsExpanded: false },
   })
 
+  await openSteps(page, id)
   const tool = page.locator(`[data-timeline-part-id="${id}"]`)
   await expect(tool.locator('[data-component="text-shimmer"]')).toHaveAttribute("data-active", "true")
   await expect(tool.locator('[data-component="shell-submessage"]')).toHaveText(command)
@@ -108,4 +110,11 @@ test("moves busy through retry and recovery to final idle content", async ({ pag
 
 function lines(count: number) {
   return Array.from({ length: count }, (_, index) => `line ${index + 1}`).join("\n")
+}
+
+async function openSteps(page: Parameters<typeof setupTimeline>[0], partID: string) {
+  await page
+    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
+    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+    .click()
 }

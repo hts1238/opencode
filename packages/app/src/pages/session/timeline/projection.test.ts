@@ -14,6 +14,19 @@ const context = (key: string, partIDs: string[], userMessageID = "user-1") =>
     previousAssistantPart: false,
   })
 
+const toolGroup = (key: string, partIDs: string[], userMessageID = "user-1") =>
+  new TimelineRow.AssistantToolGroup({
+    userMessageID,
+    groups: [
+      {
+        key,
+        type: "context",
+        refs: partIDs.map((partID) => ({ messageID: "assistant-1", partID })),
+      } satisfies PartGroup,
+    ],
+    previousAssistantPart: false,
+  })
+
 const user = (userMessageID = "user-1") => new TimelineRow.UserMessage({ userMessageID, anchor: true })
 const keys = (rows: TimelineRow.TimelineRow[]) => rows.map(TimelineRow.key)
 
@@ -76,6 +89,13 @@ describe("reuseTimelineRows", () => {
       reused: [[0, 0]],
     },
     {
+      name: "preserves a nested context key when its first member is removed",
+      previous: [toolGroup("context:a", ["a", "b"])],
+      rows: [toolGroup("context:b", ["b"])],
+      expected: ["assistant-tool-group:user-1:context:a"],
+      reused: [],
+    },
+    {
       name: "does not create accidental key collisions",
       previous: [context("context:a", ["a", "b", "c"])],
       rows: [context("context:b", ["b"]), context("context:a", ["a"]), context("context:c", ["c"])],
@@ -92,5 +112,31 @@ describe("reuseTimelineRows", () => {
     expect(keys(result)).toEqual([...expected])
     expect(new Set(keys(result)).size).toBe(result.length)
     reused.forEach(([resultIndex, previousIndex]) => expect(result[resultIndex]).toBe(previous[previousIndex]))
+  })
+
+  test("reuses an unchanged nested group when another tool is appended", () => {
+    const previous = toolGroup("context:a", ["a", "b"])
+    const row = new TimelineRow.AssistantToolGroup({
+      userMessageID: "user-1",
+      groups: [
+        {
+          key: "context:a",
+          type: "context",
+          refs: ["a", "b"].map((partID) => ({ messageID: "assistant-1", partID })),
+        },
+        {
+          key: "part:assistant-1:shell",
+          type: "part",
+          ref: { messageID: "assistant-1", partID: "shell" },
+        },
+      ],
+      previousAssistantPart: false,
+    })
+
+    const result = reuseTimelineRows([previous], [row])
+    expect(result[0]).not.toBe(previous)
+    expect(result[0]?._tag).toBe("AssistantToolGroup")
+    if (result[0]?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
+    expect(result[0].groups[0]).toBe(previous.groups[0])
   })
 })

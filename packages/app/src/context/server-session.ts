@@ -39,9 +39,10 @@ function needsOlderTurnRoot(source: readonly SessionMessageInfo[]) {
       message.type === "user" ||
       message.type === "shell" ||
       message.type === "assistant" ||
+      message.type === "compaction" ||
       (message.type === "synthetic" && message.description?.trim()),
   )
-  return boundary?.type === "assistant"
+  return boundary?.type === "assistant" || boundary?.type === "compaction"
 }
 
 type OptimisticItem = {

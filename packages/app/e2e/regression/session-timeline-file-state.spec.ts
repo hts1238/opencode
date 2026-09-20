@@ -14,7 +14,8 @@ test("updates edit diagnostics without resetting manual collapse state", async (
     messages: [userMessage(), assistantMessage([base])],
     settings: { editToolPartsExpanded: true },
   })
-  const trigger = page.locator(`[data-timeline-part-id="${editID}"] [data-slot="collapsible-trigger"]`).first()
+  await openSteps(page, editID)
+  const trigger = page.locator(`[data-timeline-part-id="${editID}"] [data-slot="collapsible-trigger"]`)
   await trigger.click()
   await expect(trigger).toHaveAttribute("aria-expanded", "false")
   await timeline.send(
@@ -44,8 +45,11 @@ test("preserves nested patch file state through outer collapse and reopen", asyn
     ],
     settings: { editToolPartsExpanded: true },
   })
+  await openSteps(page, patchID)
   const wrapper = page.locator(`[data-timeline-part-id="${patchID}"]`)
-  const outer = wrapper.locator('[data-slot="collapsible-trigger"]').first()
+  const outer = wrapper.locator(
+    ':scope > [data-component="apply-patch-tool"] > [data-component="collapsible"] > [data-slot="collapsible-trigger"]',
+  )
   const deleted = wrapper.locator('[data-scope="apply-patch"] [data-type="delete"]')
   await deleted.getByRole("button").click()
   await expect(deleted.getByRole("button")).toHaveAttribute("aria-expanded", "true")
@@ -55,6 +59,13 @@ test("preserves nested patch file state through outer collapse and reopen", asyn
   await expect(outer).toHaveAttribute("aria-expanded", "true")
   await expect(deleted.getByRole("button")).toHaveAttribute("aria-expanded", "true")
 })
+
+async function openSteps(page: Parameters<typeof setupTimeline>[0], partID: string) {
+  await page
+    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
+    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+    .click()
+}
 
 function patchFile(filePath: string, type: "add" | "update" | "delete") {
   return {

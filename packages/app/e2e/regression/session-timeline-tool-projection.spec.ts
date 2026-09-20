@@ -20,6 +20,7 @@ test("renders every tool error outcome without leaking hidden tools", async ({ p
     toolPart("prt_todo_error", "todowrite", "error", { todos: [] }, { error: "Hidden todo failure" }),
   )
   await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
+  await openAllSteps(page)
 
   await expect(page.locator('[data-kind="tool-error-card"]')).toHaveCount(ordinary.length + 1)
   await expect(page.getByText(/dismissed/i)).toBeVisible()
@@ -44,6 +45,7 @@ test("transitions shell and question through running error outcomes", async ({ p
       ),
     ],
   })
+  await openAllSteps(page)
   await timeline.waitForPart(shellID)
   await expect(page.locator(`[data-timeline-part-id="${questionID}"]`)).toHaveCount(0)
   await timeline.send(partUpdated(toolPart(shellID, "bash", "running", { command: "exit 1" })), 120)
@@ -77,11 +79,20 @@ test("labels all web search provider variants", async ({ page }) => {
     toolPart("prt_search_generic", "websearch", "completed", { query: "generic" }),
   ]
   await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
+  await openAllSteps(page)
 
   await expect(page.getByRole("button", { name: /Parallel Web Search/ })).toBeVisible()
   await expect(page.getByRole("button", { name: /Exa Web Search/ })).toBeVisible()
   await expect(page.getByRole("button", { name: /^Web Search/ })).toBeVisible()
 })
+
+async function openAllSteps(page: Parameters<typeof setupTimeline>[0]) {
+  const groups = page.locator('[data-component="assistant-tool-group"]')
+  await expect(groups).not.toHaveCount(0)
+  for (const group of await groups.all()) {
+    await group.locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]').click()
+  }
+}
 
 function questionInput() {
   return { questions: [{ header: "Stability", question: "Keep it stable?", options: [] }] }

@@ -17,6 +17,7 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
       reducedMotion: true,
       deviceScaleFactor,
     })
+    await openSteps(page, shellID)
     const part = page.locator(`[data-timeline-part-id="${shellID}"]`)
     const output = part.locator('[data-component="bash-output"]')
     const row = page.locator("[data-timeline-key]", { has: part })
@@ -32,6 +33,7 @@ for (const deviceScaleFactor of [1.25, 1.5]) {
       element.style.height = `${outputRect.bottom - rowRect.top - 0.49}px`
       element.style.transform = "translateY(0.25px)"
       output.style.setProperty("--v2-border-border-base", "rgb(255, 0, 255)")
+      output.style.setProperty("--border-weak-base", "rgb(255, 0, 255)")
       output.style.setProperty("background", "rgb(0, 0, 0)", "important")
       const style = getComputedStyle(output)
       return {
@@ -85,6 +87,7 @@ test("keeps the patch card inside a fractionally short virtual row", async ({ pa
     settings: { editToolPartsExpanded: true, newLayoutDesigns: true },
     reducedMotion: true,
   })
+  await openSteps(page, patchID)
   const part = page.locator(`[data-timeline-part-id="${patchID}"]`)
   const card = part.locator('[data-component="accordion"][data-scope="apply-patch"]')
   const row = page.locator("[data-timeline-key]", { has: part })
@@ -157,6 +160,13 @@ test("allows paint rounding for every framed row but not fixed turn gaps", async
   expect(rows.filter((row) => row.tag !== "TurnGap").every((row) => row.clipMargin === "0.5px")).toBe(true)
   expect(rows.filter((row) => row.tag === "TurnGap")).toEqual([{ tag: "TurnGap", clipMargin: "0px" }])
 })
+
+async function openSteps(page: Page, partID: string) {
+  await page
+    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
+    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+    .click()
+}
 
 async function captureCardEdges(page: Page, card: Locator) {
   const box = await card.boundingBox()

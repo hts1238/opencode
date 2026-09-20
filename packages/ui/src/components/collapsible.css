@@ -39,6 +39,10 @@
       will-change: transform;
     }
 
+    [data-slot="collapsible-arrow-icon"]:dir(rtl) {
+      transform: translateZ(0) rotate(90deg);
+    }
+
     &:hover [data-slot="collapsible-arrow"] {
       opacity: 1;
     }

@@ -28,7 +28,17 @@ function assistant(id: string, content: CurrentAssistant["content"], error?: Cur
   } satisfies CurrentAssistant
 }
 
-function constructAssistantRows(assistants: CurrentAssistant[]) {
+function completedTool(id: string, name: string) {
+  return {
+    type: "tool",
+    id,
+    name,
+    state: { status: "completed", input: {}, metadata: {}, content: [{ type: "text", text: "done" }] },
+    time: { created: 2, ran: 2, completed: 3 },
+  } satisfies CurrentAssistant["content"][number]
+}
+
+function constructAssistantRows(assistants: CurrentAssistant[], showReasoning = true) {
   const source = [
     { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
     ...assistants,
@@ -40,7 +50,7 @@ function constructAssistantRows(assistants: CurrentAssistant[]) {
     source,
     (messageID) => messages.get(messageID),
     (messageID) => normalized.parts.get(messageID) ?? [],
-    true,
+    showReasoning,
     "idle",
     true,
     normalized.messages.filter((message) => message.role === "user"),
@@ -121,7 +131,7 @@ describe("current session timeline rows", () => {
     expect(result.activeMessageID).toBe("msg_shell")
     expect(result.rows.map(TimelineRow.key)).toEqual([
       "user-message:msg_shell",
-      "assistant-part:msg_shell:msg_shell:tool",
+      "assistant-tool-group:msg_shell:msg_shell:tool",
     ])
   })
 
@@ -285,6 +295,168 @@ describe("current session timeline rows", () => {
     const preamble = rows[1]
     if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
     expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0", "msg_assistant:text:0"])
+  })
+
+  test("groups low-level tools independently and keeps subagents visible", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "reasoning", text: "thinking" },
+        completedTool("call_shell_1", "shell"),
+        completedTool("call_read", "read"),
+        completedTool("call_task", "task"),
+        completedTool("call_skill", "skill"),
+        { type: "text", text: "Final answer." },
+      ]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual([
+      "UserMessage",
+      "AssistantPreamble",
+      "AssistantToolGroup",
+      "AssistantPart",
+      "AssistantToolGroup",
+      "AssistantPart",
+    ])
+    const firstTools = rows[2]
+    if (firstTools?._tag !== "AssistantToolGroup") throw new Error("expected first tool group")
+    expect(firstTools.groups.map((group) => group.key)).toEqual(["call_shell_1", "call_read"])
+    const task = rows[3]
+    if (task?._tag !== "AssistantPart") throw new Error("expected visible task")
+    expect(task.group.key).toBe("call_task")
+  })
+
+  test("does not merge tool groups across hidden reasoning", () => {
+    const rows = constructAssistantRows(
+      [
+        assistant("msg_assistant", [
+          completedTool("call_shell", "shell"),
+          { type: "reasoning", text: "hidden thinking" },
+          completedTool("call_skill", "skill"),
+          { type: "text", text: "Final answer." },
+        ]),
+      ],
+      false,
+    )
+
+    expect(rows.map((row) => row._tag)).toEqual([
+      "UserMessage",
+      "AssistantToolGroup",
+      "AssistantToolGroup",
+      "AssistantPart",
+    ])
+  })
+
+  test("creates an independent block for every current compaction", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
+      {
+        id: "msg_compaction_1",
+        type: "compaction",
+        status: "completed",
+        reason: "auto",
+        summary: "First summary",
+        recent: "recent",
+        time: { created: 2 },
+      },
+      {
+        id: "msg_compaction_2",
+        type: "compaction",
+        status: "completed",
+        reason: "manual",
+        summary: "Second summary",
+        recent: "recent",
+        time: { created: 3 },
+      },
+    ] satisfies SessionMessageInfo[]
+    const normalized = normalizeSessionMessages("ses_1", source)
+    const messages = new Map(normalized.messages.map((message) => [message.id, message]))
+
+    const rows = Timeline.constructSessionMessageRows(
+      source,
+      (messageID) => messages.get(messageID),
+      (messageID) => normalized.parts.get(messageID) ?? [],
+      true,
+      "idle",
+      true,
+      normalized.messages.filter((message) => message.role === "user"),
+    ).rows
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "TurnDivider", "TurnDivider"])
+    expect(rows.filter((row) => row._tag === "TurnDivider").map((row) => row.summary)).toEqual([
+      "First summary",
+      "Second summary",
+    ])
+    expect(rows.map(TimelineRow.key)).toEqual([
+      "user-message:msg_user",
+      "turn-divider:msg_user:compaction:msg_compaction_1",
+      "turn-divider:msg_user:compaction:msg_compaction_2",
+    ])
+  })
+
+  test("keeps a current compaction after the assistant content it summarizes", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
+      assistant("msg_assistant", [{ type: "text", text: "Answer before compaction" }]),
+      {
+        id: "msg_compaction",
+        type: "compaction",
+        status: "completed",
+        reason: "auto",
+        summary: "Compacted context",
+        recent: "recent",
+        time: { created: 4 },
+      },
+    ] satisfies SessionMessageInfo[]
+    const normalized = normalizeSessionMessages("ses_1", source)
+    const messages = new Map(normalized.messages.map((message) => [message.id, message]))
+
+    const rows = Timeline.constructSessionMessageRows(
+      source,
+      (messageID) => messages.get(messageID),
+      (messageID) => normalized.parts.get(messageID) ?? [],
+      true,
+      "idle",
+      true,
+      normalized.messages.filter((message) => message.role === "user"),
+    ).rows
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "TurnDivider"])
+  })
+
+  test("moves a legacy summary response into its compaction block", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
+      assistant("msg_summary", [{ type: "text", text: "Long compacted context" }]),
+    ] satisfies SessionMessageInfo[]
+    const normalized = normalizeSessionMessages("ses_1", source)
+    normalized.parts.get("msg_user")?.push({
+      id: "prt_compaction",
+      sessionID: "ses_1",
+      messageID: "msg_user",
+      type: "compaction",
+      auto: true,
+    })
+    const messages = new Map(
+      normalized.messages.map((message) => [
+        message.id,
+        message.role === "assistant" ? { ...message, summary: true } : message,
+      ]),
+    )
+
+    const rows = Timeline.constructSessionMessageRows(
+      source,
+      (messageID) => messages.get(messageID),
+      (messageID) => normalized.parts.get(messageID) ?? [],
+      true,
+      "idle",
+      true,
+      normalized.messages.filter((message) => message.role === "user"),
+    ).rows
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "TurnDivider"])
+    const compaction = rows[1]
+    if (compaction?._tag !== "TurnDivider") throw new Error("expected compaction block")
+    expect(compaction.summary).toBe("Long compacted context")
   })
 
   test("does not collapse content across an interruption boundary", () => {

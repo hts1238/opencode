@@ -64,6 +64,10 @@ export function createTimelineProjection(input: {
     const result = new Map<string, string>()
     rows().forEach((row) => {
       if (row._tag === "AssistantPart") result.set(row.userMessageID, row.group.key)
+      if (row._tag === "AssistantToolGroup") {
+        const group = row.groups.at(-1)
+        if (group) result.set(row.userMessageID, group.key)
+      }
     })
     return result
   })

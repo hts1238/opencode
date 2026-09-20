@@ -23,10 +23,22 @@ test("groups singleton and separated context operations at correct boundaries", 
   ]
   await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
 
-  await expect(page.locator('[data-timeline-part-ids="prt_boundary_01_read"]')).toBeVisible()
-  await expect(page.locator('[data-timeline-part-ids="prt_boundary_03_glob,prt_boundary_04_grep"]')).toBeVisible()
-  await expect(page.locator('[data-timeline-part-ids="prt_boundary_06_list"]')).toBeVisible()
-  await expect(page.locator('[data-timeline-row="AssistantPart"]')).toHaveCount(5)
+  const toolGroups = page.locator('[data-component="assistant-tool-group"]')
+  await expect(toolGroups).toHaveCount(2)
+  for (const toolGroup of await toolGroups.all()) {
+    await toolGroup.locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]').click()
+  }
+  await expect(
+    page.locator('.tool-collapsible[data-timeline-part-ids="prt_boundary_01_read"]'),
+  ).toBeVisible()
+  await expect(
+    page.locator('.tool-collapsible[data-timeline-part-ids="prt_boundary_03_glob,prt_boundary_04_grep"]'),
+  ).toBeVisible()
+  await expect(
+    page.locator('.tool-collapsible[data-timeline-part-ids="prt_boundary_06_list"]'),
+  ).toBeVisible()
+  await expect(page.locator('[data-timeline-row="AssistantPart"]')).toHaveCount(1)
+  await expect(page.locator('[data-timeline-row="AssistantToolGroup"]')).toHaveCount(2)
 })
 
 test("reducer-hardening: converges when idle arrives before final part and message completion", async ({ page }) => {

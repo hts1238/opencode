@@ -18,7 +18,11 @@ for (const profile of [
       locale: profile.locale,
     })
 
-    const group = page.locator(`[data-timeline-part-ids="${ids.join(",")}"]`)
+    await page
+      .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids="${ids.join(",")}"]`)
+      .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+      .click()
+    const group = page.locator(`.tool-collapsible[data-timeline-part-ids="${ids.join(",")}"]`)
     await expect(group.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", profile.label)
     await expect(page.locator("html")).toHaveAttribute("lang", profile.locale)
   })

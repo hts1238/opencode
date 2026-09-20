@@ -58,6 +58,7 @@ import { downloadSessionExport, fetchSessionExport, sessionExportFilename } from
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 import { Popover as KobaltePopover } from "@kobalte/core/popover"
 import { normalize } from "@opencode-ai/session-ui/session-diff"
+import { Markdown } from "@opencode-ai/session-ui/markdown"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
 import { SessionContextUsage } from "@/components/session-context-usage"
@@ -1120,6 +1121,85 @@ export function MessageTimeline(props: {
     )
   }
 
+  function TimelineAssistantToolGroupRow(props: {
+    row: Accessor<TimelineRowByTag<"AssistantToolGroup">>
+    onSizeChange?: () => void
+  }) {
+    const openKey = () => `steps:${props.row().groups[0]?.key ?? "empty"}`
+    const open = createMemo(() => toolOpen[openKey()] === true)
+    const partIDs = createMemo(() =>
+      props.row().groups.flatMap((group) =>
+        group.type === "part" ? [group.ref.partID] : group.refs.map((ref) => ref.partID),
+      ),
+    )
+    const setOpen = (value: boolean) => {
+      setToolOpen(openKey(), value)
+      props.onSizeChange?.()
+    }
+
+    return (
+      <Collapsible
+        data-component="assistant-tool-group"
+        data-timeline-part-ids={partIDs().join(",")}
+        open={open()}
+        onOpenChange={setOpen}
+      >
+        <Collapsible.Trigger data-slot="assistant-tool-group-toggle" data-position="start">
+          <span data-slot="assistant-tool-group-toggle-copy">
+            {open() ? language.t("ui.sessionTurn.steps.hide") : language.t("ui.sessionTurn.steps.show")}
+          </span>
+          <Collapsible.Arrow />
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <div data-slot="assistant-tool-group-content">
+            <For each={props.row().groups}>
+              {(group) =>
+                renderAssistantPartGroup(
+                  () => ({ userMessageID: props.row().userMessageID, group }),
+                  props.onSizeChange,
+                )
+              }
+            </For>
+          </div>
+          <Collapsible.Trigger data-slot="assistant-tool-group-toggle" data-position="end">
+            <span data-slot="assistant-tool-group-toggle-copy">{language.t("ui.sessionTurn.steps.hide")}</span>
+            <Collapsible.Arrow />
+          </Collapsible.Trigger>
+        </Collapsible.Content>
+      </Collapsible>
+    )
+  }
+
+  function TimelineCompactionRow(props: {
+    row: Accessor<TimelineRowByTag<"TurnDivider">>
+    onSizeChange?: () => void
+  }) {
+    const openKey = () => `compaction:${props.row().id ?? props.row().userMessageID}`
+    const open = createMemo(() => toolOpen[openKey()] === true)
+    const setOpen = (value: boolean) => {
+      setToolOpen(openKey(), value)
+      props.onSizeChange?.()
+    }
+
+    return (
+      <Collapsible data-component="compaction-message" open={open()} onOpenChange={setOpen}>
+        <Collapsible.Trigger data-slot="compaction-message-toggle">
+          <span data-slot="compaction-message-line" />
+          <span data-slot="compaction-message-label" class="text-12-regular text-text-weak">
+            {language.t("ui.messagePart.compaction")}
+            <Collapsible.Arrow />
+          </span>
+          <span data-slot="compaction-message-line" />
+        </Collapsible.Trigger>
+        <Collapsible.Content>
+          <div data-slot="compaction-message-content">
+            <Markdown text={props.row().summary ?? ""} cacheKey={props.row().id} />
+          </div>
+        </Collapsible.Content>
+      </Collapsible>
+    )
+  }
+
   function TimelineRowFrame(input: { row: Accessor<FramedTimelineRow>; children: JSX.Element }) {
     const anchor = () => {
       const row = input.row()
@@ -1127,7 +1207,10 @@ export function MessageTimeline(props: {
     }
     const previousAssistantPart = () => {
       const row = input.row()
-      return row._tag === "AssistantPart" && row.previousAssistantPart
+      return (
+        (row._tag === "AssistantPart" || row._tag === "AssistantPreamble" || row._tag === "AssistantToolGroup") &&
+        row.previousAssistantPart
+      )
     }
 
     return (
@@ -1233,11 +1316,12 @@ export function MessageTimeline(props: {
           <TimelineRowFrame row={turnDividerRow}>
             <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
               <div data-slot="session-turn-compaction">
-                <MessageDivider
-                  label={language.t(
-                    turnDividerRow().label === "compaction" ? "ui.messagePart.compaction" : "ui.message.interrupted",
-                  )}
-                />
+                <Show
+                  when={turnDividerRow().label === "compaction"}
+                  fallback={<MessageDivider label={language.t("ui.message.interrupted")} />}
+                >
+                  <TimelineCompactionRow row={turnDividerRow} onSizeChange={onSizeChange} />
+                </Show>
               </div>
             </div>
           </TimelineRowFrame>
@@ -1268,6 +1352,21 @@ export function MessageTimeline(props: {
                 aria-hidden={workingTurn(assistantPreambleRow().userMessageID)}
               >
                 <TimelineAssistantPreambleRow row={assistantPreambleRow} onSizeChange={onSizeChange} />
+              </div>
+            </div>
+          </TimelineRowFrame>
+        )
+      }
+      case "AssistantToolGroup": {
+        const assistantToolGroupRow = row as Accessor<TimelineRowByTag<"AssistantToolGroup">>
+        return (
+          <TimelineRowFrame row={assistantToolGroupRow}>
+            <div data-slot="session-turn-message-container" class="w-full px-4 md:px-5">
+              <div
+                data-slot="session-turn-assistant-content"
+                aria-hidden={workingTurn(assistantToolGroupRow().userMessageID)}
+              >
+                <TimelineAssistantToolGroupRow row={assistantToolGroupRow} onSizeChange={onSizeChange} />
               </div>
             </div>
           </TimelineRowFrame>

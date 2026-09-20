@@ -32,8 +32,11 @@ test.describe("regression: session timeline context group resize", () => {
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
-    await expectAppVisible(page.locator(`[data-timeline-part-ids="${contextIDs.join(",")}"]`).first())
-    await expectAppVisible(page.locator(`[data-timeline-part-id="${followingTextID}"]`).first())
+    await openSteps(page)
+    await expectAppVisible(
+      page.locator(`.tool-collapsible[data-timeline-part-ids="${contextIDs.join(",")}"]`),
+    )
+    await expectAppVisible(page.locator(`[data-timeline-part-id="${followingTextID}"]`))
     await settle(page)
 
     const samples = await sampleExpansion(page)
@@ -57,17 +60,18 @@ test.describe("regression: session timeline context group resize", () => {
     await expectSessionTitle(page, title)
     const devtools = await page.context().newCDPSession(page)
     await devtools.send("Emulation.setCPUThrottlingRate", { rate: 4 })
-    const context = page.locator(`[data-timeline-part-ids="${contextIDs.join(",")}"]`).first()
+    await openSteps(page)
+    const context = page.locator(`.tool-collapsible[data-timeline-part-ids="${contextIDs.join(",")}"]`)
     await expectAppVisible(context)
     await expect(context.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Exploring")
 
-    const contextSelector = `[data-timeline-part-ids="${contextIDs.join(",")}"]`
+    const contextSelector = `.tool-collapsible[data-timeline-part-ids="${contextIDs.join(",")}"]`
     const regions = defineVisualRegions({
       status: {
         selector: `${contextSelector} [data-component="tool-status-title"]`,
         opacitySelectors: ['[data-slot="tool-status-active"]', '[data-slot="tool-status-done"]'],
       },
-      context: { selector: contextSelector, closest: '[data-timeline-row="AssistantPart"]' },
+      context: { selector: contextSelector, closest: '[data-timeline-row="AssistantToolGroup"]' },
       following: {
         selector: `[data-timeline-part-id="${followingTextID}"]`,
         closest: '[data-timeline-row="AssistantPart"]',
@@ -136,6 +140,13 @@ async function configurePage(page: Page) {
   })
 }
 
+async function openSteps(page: Page) {
+  await page
+    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids="${contextIDs.join(",")}"]`)
+    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
+    .click()
+}
+
 async function sampleExpansion(page: Page) {
   return page.evaluate(
     ({ contextIDs, followingTextID }) =>
@@ -152,11 +163,13 @@ async function sampleExpansion(page: Page) {
           expanded: string | null
         }[]
       >((resolve) => {
-        const context = document.querySelector<HTMLElement>(`[data-timeline-part-ids="${contextIDs.join(",")}"]`)
+        const context = document.querySelector<HTMLElement>(
+          `.tool-collapsible[data-timeline-part-ids="${contextIDs.join(",")}"]`,
+        )
         const text = document.querySelector<HTMLElement>(`[data-timeline-part-id="${followingTextID}"]`)
         const scroller = context?.closest<HTMLElement>(".scroll-view__viewport")
         const trigger = context?.querySelector<HTMLElement>('[data-slot="collapsible-trigger"]')
-        const contextRow = context?.closest<HTMLElement>('[data-timeline-row="AssistantPart"]')
+        const contextRow = context?.closest<HTMLElement>('[data-timeline-row="AssistantToolGroup"]')
         const textRow = text?.closest<HTMLElement>('[data-timeline-row="AssistantPart"]')
         if (!context || !text || !scroller || !trigger || !contextRow || !textRow)
           throw new Error("missing regression nodes")
