@@ -384,49 +384,64 @@ export namespace Timeline {
       | { type: "preamble"; groups: PartGroup[] }
       | { type: "tools"; groups: PartGroup[] }
       | { type: "compaction"; id: string; summary: string }
-      | { type: "boundary" }
     const result: Section[] = []
     const collapsePreamble =
       finalTextIndex > 0 && !items.slice(0, finalTextIndex).some((item) => item.type === "interrupted")
+    let preamble: Extract<Section, { type: "preamble" }> | undefined
+    let tools: Extract<Section, { type: "tools" }> | undefined
+
+    const pushBoundary = (item: Extract<Section, { type: "part" | "interrupted" | "compaction" }>) => {
+      result.push(item)
+      preamble = undefined
+      tools = undefined
+    }
 
     items.forEach((item, index) => {
       if (item.type === "interrupted") {
-        result.push(item)
+        pushBoundary(item)
         return
       }
       if (item.type === "compaction") {
-        result.push(item)
+        pushBoundary(item)
         return
       }
 
       const part = assistantGroupPart(item.group, refs)
       if (part?.type === "compaction") {
-        result.push({ type: "compaction", id: part.id, summary: "" })
+        pushBoundary({ type: "compaction", id: part.id, summary: "" })
         return
       }
-      if (part?.type === "reasoning" && !showReasoning) {
-        result.push({ type: "boundary" })
-        return
-      }
+      if (part?.type === "reasoning" && !showReasoning) return
 
       const type = isLowLevelToolGroup(item.group, refs)
         ? "tools"
         : collapsePreamble && index < finalTextIndex && part?.type !== "tool"
           ? "preamble"
           : "part"
-      const previous = result.at(-1)
       if (type === "part") {
-        result.push(item)
+        pushBoundary(item)
         return
       }
-      if (previous?.type === type) {
-        previous.groups.push(item.group)
+      if (type === "preamble") {
+        if (preamble) {
+          preamble.groups.push(item.group)
+          return
+        }
+        const section: Extract<Section, { type: "preamble" }> = { type, groups: [item.group] }
+        result.push(section)
+        preamble = section
         return
       }
-      result.push({ type, groups: [item.group] })
+      if (tools) {
+        tools.groups.push(item.group)
+        return
+      }
+      const section: Extract<Section, { type: "tools" }> = { type, groups: [item.group] }
+      result.push(section)
+      tools = section
     })
 
-    return result.filter((item): item is Exclude<Section, { type: "boundary" }> => item.type !== "boundary")
+    return result
   }
 
   function isLowLevelToolGroup(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {

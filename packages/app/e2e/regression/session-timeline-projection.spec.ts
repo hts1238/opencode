@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test"
 import {
   assistantMessage,
+  reasoningPart,
   setupTimeline,
   status,
   textPart,
@@ -74,6 +75,33 @@ test.describe("session timeline projection", () => {
       await expect(page.locator(`[data-timeline-part-id="${id}"]`), id).toBeVisible()
     }
     await expect(page.locator('[data-timeline-part-id="prt_todo"]')).toHaveCount(0)
+  })
+
+  test("collapses an alternating work chain into one reasoning and one steps block", async ({ page }) => {
+    await setupTimeline(page, {
+      messages: [
+        userMessage(),
+        assistantMessage([
+          reasoningPart("prt_01_reasoning", "First reasoning"),
+          toolPart("prt_02_shell", "shell", "completed", { command: "pwd" }),
+          reasoningPart("prt_03_reasoning", "Second reasoning"),
+          toolPart("prt_04_skill", "skill", "completed", { name: "inspect" }),
+          textPart("prt_05_final", "Final answer"),
+        ]),
+      ],
+      settings: { showReasoningSummaries: true },
+    })
+
+    const reasoning = page.getByRole("button", { name: "Show reasoning", exact: true })
+    const steps = page.getByRole("button", { name: "Show steps", exact: true })
+    await expect(reasoning).toHaveCount(1)
+    await expect(steps).toHaveCount(1)
+    await reasoning.click()
+    await steps.click()
+    await expect(page.getByText("First reasoning", { exact: true })).toBeVisible()
+    await expect(page.getByText("Second reasoning", { exact: true })).toBeVisible()
+    await expect(page.locator('[data-timeline-part-id="prt_02_shell"]')).toBeVisible()
+    await expect(page.locator('[data-timeline-part-id="prt_04_skill"]')).toBeVisible()
   })
 
   test("projects gaps, dividers, assistant parts, and errors together", async ({ page }) => {

@@ -325,7 +325,7 @@ describe("current session timeline rows", () => {
     expect(task.group.key).toBe("call_task")
   })
 
-  test("does not merge tool groups across hidden reasoning", () => {
+  test("merges tool groups across hidden reasoning", () => {
     const rows = constructAssistantRows(
       [
         assistant("msg_assistant", [
@@ -341,9 +341,39 @@ describe("current session timeline rows", () => {
     expect(rows.map((row) => row._tag)).toEqual([
       "UserMessage",
       "AssistantToolGroup",
+      "AssistantPart",
+    ])
+    const tools = rows[1]
+    if (tools?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
+    expect(tools.groups.map((group) => group.key)).toEqual(["call_shell", "call_skill"])
+  })
+
+  test("groups alternating reasoning and tools into one block each", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "reasoning", text: "first thought" },
+        completedTool("call_shell", "shell"),
+        { type: "reasoning", text: "second thought" },
+        completedTool("call_skill", "skill"),
+        { type: "text", text: "Final answer." },
+      ]),
+    ])
+
+    expect(rows.map((row) => row._tag)).toEqual([
+      "UserMessage",
+      "AssistantPreamble",
       "AssistantToolGroup",
       "AssistantPart",
     ])
+    const reasoning = rows[1]
+    if (reasoning?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(reasoning.groups.map((group) => group.key)).toEqual([
+      "msg_assistant:reasoning:0",
+      "msg_assistant:reasoning:1",
+    ])
+    const tools = rows[2]
+    if (tools?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
+    expect(tools.groups.map((group) => group.key)).toEqual(["call_shell", "call_skill"])
   })
 
   test("creates an independent block for every current compaction", () => {
