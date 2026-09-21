@@ -3,6 +3,10 @@ import type { PartGroup } from "@opencode-ai/session-ui/message-part"
 import { Data, Equal } from "effect"
 
 export type SummaryDiff = SnapshotFileDiff & { file: string }
+export type AssistantTimelineItem =
+  | { type: "part"; group: PartGroup }
+  | { type: "interrupted" }
+  | { type: "compaction"; id: string; summary: string }
 
 export namespace TimelineRow {
   export class TurnGap extends Data.TaggedClass("TurnGap")<{
@@ -28,7 +32,7 @@ export namespace TimelineRow {
   }> {}
   export class AssistantPreamble extends Data.TaggedClass("AssistantPreamble")<{
     userMessageID: string
-    groups: PartGroup[]
+    items: AssistantTimelineItem[]
     previousAssistantPart: boolean
   }> {}
   export class AssistantToolGroup extends Data.TaggedClass("AssistantToolGroup")<{
@@ -78,7 +82,7 @@ export namespace TimelineRow {
       case "AssistantPart":
         return `assistant-part:${row.userMessageID}:${row.group.key}`
       case "AssistantPreamble":
-        return `assistant-preamble:${row.userMessageID}:${row.groups.map((group) => group.key).join("|")}`
+        return `assistant-preamble:${row.userMessageID}`
       case "AssistantToolGroup":
         return `assistant-tool-group:${row.userMessageID}:${row.groups[0]?.key ?? "empty"}`
       case "Thinking":

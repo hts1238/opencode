@@ -13,6 +13,7 @@ test("keeps one connection open while delivering multiple events", async ({ page
   const first = await timeline.transport.send(partUpdated(textPart("prt_transport_first", "first event")))
   const second = await timeline.transport.send(partUpdated(textPart("prt_transport_second", "second event")))
 
+  await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
   await timeline.waitForPart("prt_transport_first")
   await timeline.waitForPart("prt_transport_second")
   expect(first.connectionID).toBe(second.connectionID)
@@ -27,6 +28,7 @@ test("delivers a burst from one stream chunk", async ({ page }) => {
     partUpdated(textPart("prt_transport_burst_b", "burst b")),
   ])
 
+  await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
   await timeline.waitForPart("prt_transport_burst_a")
   await timeline.waitForPart("prt_transport_burst_b")
   expect(acknowledgements.map((item) => item.chunkCount)).toEqual([1, 1])
@@ -50,23 +52,22 @@ test("parses split JSON and a split multibyte code point", async ({ page }) => {
 })
 
 test("delivers server heartbeat without mutating the timeline", async ({ page }) => {
-  const sentinelID = "prt_transport_heartbeat_sentinel"
+  const sentinelID = "prt_transport_01_heartbeat_sentinel"
   const timeline = await setupTimeline(page, {
-    messages: [userMessage(), assistantMessage([textPart("prt_transport_steady", "steady")])],
+    messages: [userMessage(), assistantMessage([textPart("prt_transport_00_steady", "steady")])],
   })
-  await timeline.waitForPart("prt_transport_steady")
+  await timeline.waitForPart("prt_transport_00_steady")
   const before = await stableTimelineRows(page)
 
   await timeline.transport.writeRaw(": heartbeat\n\n")
-  await timeline.transport.send(partUpdated(textPart(sentinelID, "heartbeat processed")))
-  await timeline.waitForPart(sentinelID)
-
   await expect
     .poll(async () => {
       const rows = await timelineRows(page)
       return rows.filter((row) => before.some((item) => item.key === row.key))
     })
     .toEqual(before)
+  await timeline.transport.send(partUpdated(textPart(sentinelID, "heartbeat processed")))
+  await timeline.waitForPart(sentinelID)
   await expect.poll(async () => (await timeline.transport.connections()).length).toBe(1)
 })
 

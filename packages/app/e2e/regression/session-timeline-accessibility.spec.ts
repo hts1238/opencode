@@ -9,14 +9,12 @@ test("space activates a focused timeline button instead of scrolling", async ({ 
     reducedMotion: true,
   })
   const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
-  const trigger = page.locator(
-    `[data-component="assistant-tool-group"][data-timeline-part-ids*="${shellID}"] [data-slot="assistant-tool-group-toggle"][data-position="start"]`,
-  )
+  const trigger = page.locator(`[data-timeline-part-id="${shellID}"] [data-slot="collapsible-trigger"]`)
   await trigger.focus()
   const before = await scroller.evaluate((element) => element.scrollTop)
   await trigger.press("Space")
   await expect(trigger).toHaveAttribute("aria-expanded", "true")
-  await expect(page.locator(`[data-timeline-part-id="${shellID}"]`)).toBeVisible()
+  await expect(page.locator(`[data-timeline-part-id="${shellID}"] [data-slot="bash-pre"]`)).toBeVisible()
   expect(await scroller.evaluate((element) => element.scrollTop)).toBe(before)
 })
 

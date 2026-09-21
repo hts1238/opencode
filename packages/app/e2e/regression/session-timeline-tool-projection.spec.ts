@@ -45,7 +45,6 @@ test("transitions shell and question through running error outcomes", async ({ p
       ),
     ],
   })
-  await openAllSteps(page)
   await timeline.waitForPart(shellID)
   await expect(page.locator(`[data-timeline-part-id="${questionID}"]`)).toHaveCount(0)
   await timeline.send(partUpdated(toolPart(shellID, "bash", "running", { command: "exit 1" })), 120)

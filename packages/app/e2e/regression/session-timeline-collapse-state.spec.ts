@@ -8,7 +8,6 @@ const sessionID = "ses_timeline_state_regression"
 const userMessageID = "msg_user_regression"
 const assistantMessageID = "msg_assistant_regression"
 const editPartID = "prt_0001_edit"
-const textPartID = "prt_9999_text"
 const title = "Timeline collapse state regression"
 const model = { providerID: "opencode", modelID: "claude-opus-4-6", variant: "max" }
 
@@ -73,12 +72,21 @@ const editPart = {
   },
 }
 
-const streamedTextPart = {
-  id: textPartID,
+const streamedQuestionPart = {
+  id: "prt_9998_question",
   sessionID,
   messageID: assistantMessageID,
-  type: "text",
-  text: "Streaming added a later assistant text part.",
+  type: "tool",
+  callID: "call_question_regression",
+  tool: "question",
+  state: {
+    status: "completed",
+    input: { questions: [{ header: "Review", question: "Continue?", options: [] }] },
+    output: "Answered",
+    title: "Review",
+    metadata: { answers: [["Yes"]] },
+    time: { start: 1700000002000, end: 1700000003000 },
+  },
 }
 
 const assistantMessage = {
@@ -108,7 +116,6 @@ test.describe("regression: session timeline local row state", () => {
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
-    await openSteps(page)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`)
     await expectAppVisible(wrapper)
@@ -124,16 +131,13 @@ test.describe("regression: session timeline local row state", () => {
       directory,
       payload: {
         type: "message.part.updated",
-        properties: { part: streamedTextPart },
+        properties: { part: streamedQuestionPart },
       },
     })
 
-    await expect(page.locator(`[data-timeline-part-id="${textPartID}"]`)).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator(`[data-timeline-part-id="${streamedQuestionPart.id}"]`)).toBeVisible({ timeout: 10_000 })
 
-    expect(await readToolState(page)).toEqual({
-      expanded: false,
-      row: "AssistantToolGroup",
-    })
+    expect(await readToolState(page)).toEqual({ expanded: false })
   })
 
   test("does not remount an edit diff when sibling parts or diff counts update", async ({ page }) => {
@@ -144,7 +148,6 @@ test.describe("regression: session timeline local row state", () => {
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
-    await openSteps(page)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`)
     await expectAppVisible(wrapper)
@@ -156,16 +159,16 @@ test.describe("regression: session timeline local row state", () => {
       directory,
       payload: {
         type: "message.part.updated",
-        properties: { part: streamedTextPart },
+        properties: { part: streamedQuestionPart },
       },
     })
 
-    await expect(page.locator(`[data-timeline-part-id="${textPartID}"]`)).toBeVisible({ timeout: 10_000 })
+    await expect(page.locator(`[data-timeline-part-id="${streamedQuestionPart.id}"]`)).toBeVisible({ timeout: 10_000 })
     const siblingProbe = await readDiffProbe(page)
     expect(siblingProbe).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-tool-group:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",
@@ -186,7 +189,7 @@ test.describe("regression: session timeline local row state", () => {
     expect(await readDiffProbe(page)).toEqual({
       fileMarker: "before",
       frameMarker: "before",
-      rowKey: `assistant-tool-group:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
+      rowKey: `assistant-part:${userMessageID}:part:${assistantMessageID}:${editPartID}`,
       rowMarker: "before",
       shadowRoots: 0,
       toolMarker: "before",
@@ -222,7 +225,6 @@ test.describe("regression: session timeline local row state", () => {
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
     await expectSessionTitle(page, title)
-    await openSteps(page)
 
     const wrapper = page.locator(`[data-timeline-part-id="${editPartID}"]`)
     const trigger = wrapper.locator('[data-slot="collapsible-trigger"]')
@@ -269,13 +271,6 @@ async function configurePage(page: Page) {
   })
 }
 
-async function openSteps(page: Page) {
-  await page
-    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${editPartID}"]`)
-    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
-    .click()
-}
-
 async function expectExpanded(locator: Locator, expected: boolean) {
   await expect.poll(() => locator.evaluate(readExpanded)).toBe(expected)
 }
@@ -297,7 +292,6 @@ async function readToolState(page: Page) {
         const content = element.querySelector<HTMLElement>('[data-slot="collapsible-content"]')
         return !!content && content.getBoundingClientRect().height > 0
       })(),
-      row: element.closest("[data-timeline-row]")?.getAttribute("data-timeline-row"),
     }))
 }
 

@@ -3,7 +3,7 @@ import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import { normalizeSessionMessages } from "@/utils/session-message"
 
 mock.module("@opencode-ai/session-ui/message-part", () => ({
-  renderable: () => true,
+  renderable: (part: { type: string }, showReasoning = true) => part.type !== "reasoning" || showReasoning,
   groupParts: (refs: Array<{ messageID: string; part: { id: string } }>) =>
     refs.map((ref) => ({
       type: "part" as const,
@@ -131,7 +131,7 @@ describe("current session timeline rows", () => {
     expect(result.activeMessageID).toBe("msg_shell")
     expect(result.rows.map(TimelineRow.key)).toEqual([
       "user-message:msg_shell",
-      "assistant-tool-group:msg_shell:msg_shell:tool",
+      "assistant-part:msg_shell:msg_shell:tool",
     ])
   })
 
@@ -265,7 +265,9 @@ describe("current session timeline rows", () => {
     expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
     const preamble = rows[1]
     if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
-    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0"])
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "msg_assistant:reasoning:0",
+    ])
   })
 
   test("collapses intermediate text in a text-only response", () => {
@@ -279,7 +281,9 @@ describe("current session timeline rows", () => {
     expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
     const preamble = rows[1]
     if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
-    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:text:0"])
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "msg_assistant:text:0",
+    ])
   })
 
   test("collapses reasoning together with intermediate assistant text", () => {
@@ -294,7 +298,10 @@ describe("current session timeline rows", () => {
     expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
     const preamble = rows[1]
     if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
-    expect(preamble.groups.map((group) => group.key)).toEqual(["msg_assistant:reasoning:0", "msg_assistant:text:0"])
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "msg_assistant:reasoning:0",
+      "msg_assistant:text:0",
+    ])
   })
 
   test("groups low-level tools independently and keeps subagents visible", () => {
@@ -309,23 +316,19 @@ describe("current session timeline rows", () => {
       ]),
     ])
 
-    expect(rows.map((row) => row._tag)).toEqual([
-      "UserMessage",
-      "AssistantPreamble",
-      "AssistantToolGroup",
-      "AssistantPart",
-      "AssistantToolGroup",
-      "AssistantPart",
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "msg_assistant:reasoning:0",
+      "call_shell_1",
+      "call_read",
+      "call_task",
+      "call_skill",
     ])
-    const firstTools = rows[2]
-    if (firstTools?._tag !== "AssistantToolGroup") throw new Error("expected first tool group")
-    expect(firstTools.groups.map((group) => group.key)).toEqual(["call_shell_1", "call_read"])
-    const task = rows[3]
-    if (task?._tag !== "AssistantPart") throw new Error("expected visible task")
-    expect(task.group.key).toBe("call_task")
   })
 
-  test("merges tool groups across hidden reasoning", () => {
+  test("keeps hidden reasoning from splitting the single preamble", () => {
     const rows = constructAssistantRows(
       [
         assistant("msg_assistant", [
@@ -338,17 +341,16 @@ describe("current session timeline rows", () => {
       false,
     )
 
-    expect(rows.map((row) => row._tag)).toEqual([
-      "UserMessage",
-      "AssistantToolGroup",
-      "AssistantPart",
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "call_shell",
+      "call_skill",
     ])
-    const tools = rows[1]
-    if (tools?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
-    expect(tools.groups.map((group) => group.key)).toEqual(["call_shell", "call_skill"])
   })
 
-  test("groups alternating reasoning and tools into one block each", () => {
+  test("keeps alternating reasoning and tools in one reasoning block", () => {
     const rows = constructAssistantRows([
       assistant("msg_assistant", [
         { type: "reasoning", text: "first thought" },
@@ -359,21 +361,49 @@ describe("current session timeline rows", () => {
       ]),
     ])
 
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const reasoning = rows[1]
+    if (reasoning?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(reasoning.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
+      "msg_assistant:reasoning:0",
+      "call_shell",
+      "msg_assistant:reasoning:1",
+      "call_skill",
+    ])
+  })
+
+  test("groups steps only within their side of the reasoning boundary", () => {
+    const rows = constructAssistantRows([
+      assistant("msg_assistant", [
+        { type: "reasoning", text: "thinking" },
+        completedTool("call_before_1", "shell"),
+        completedTool("call_before_2", "read"),
+        { type: "text", text: "Still working." },
+        completedTool("call_after_1", "shell"),
+        completedTool("call_after_2", "read"),
+        completedTool("call_task", "task"),
+        completedTool("call_single", "skill"),
+      ]),
+    ])
+
     expect(rows.map((row) => row._tag)).toEqual([
       "UserMessage",
       "AssistantPreamble",
+      "AssistantPart",
       "AssistantToolGroup",
       "AssistantPart",
+      "AssistantPart",
     ])
-    const reasoning = rows[1]
-    if (reasoning?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
-    expect(reasoning.groups.map((group) => group.key)).toEqual([
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.items.flatMap((item) => (item.type === "part" ? [item.group.key] : []))).toEqual([
       "msg_assistant:reasoning:0",
-      "msg_assistant:reasoning:1",
+      "call_before_1",
+      "call_before_2",
     ])
-    const tools = rows[2]
+    const tools = rows[3]
     if (tools?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
-    expect(tools.groups.map((group) => group.key)).toEqual(["call_shell", "call_skill"])
+    expect(tools.groups.map((group) => group.key)).toEqual(["call_after_1", "call_after_2"])
   })
 
   test("creates an independent block for every current compaction", () => {
@@ -453,6 +483,41 @@ describe("current session timeline rows", () => {
     expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "TurnDivider"])
   })
 
+  test("keeps a compaction before the final text inside the reasoning block", () => {
+    const source = [
+      { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
+      {
+        id: "msg_compaction",
+        type: "compaction",
+        status: "completed",
+        reason: "auto",
+        summary: "Compacted context",
+        recent: "recent",
+        time: { created: 2 },
+      },
+      assistant("msg_assistant", [{ type: "text", text: "Final answer." }]),
+    ] satisfies SessionMessageInfo[]
+    const normalized = normalizeSessionMessages("ses_1", source)
+    const messages = new Map(normalized.messages.map((message) => [message.id, message]))
+
+    const rows = Timeline.constructSessionMessageRows(
+      source,
+      (messageID) => messages.get(messageID),
+      (messageID) => normalized.parts.get(messageID) ?? [],
+      true,
+      "idle",
+      true,
+      normalized.messages.filter((message) => message.role === "user"),
+    ).rows
+
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.items).toEqual([
+      { type: "compaction", id: "msg_compaction", summary: "Compacted context" },
+    ])
+  })
+
   test("moves a legacy summary response into its compaction block", () => {
     const source = [
       { id: "msg_user", type: "user", text: "question", time: { created: 1 } },
@@ -489,7 +554,7 @@ describe("current session timeline rows", () => {
     expect(compaction.summary).toBe("Long compacted context")
   })
 
-  test("does not collapse content across an interruption boundary", () => {
+  test("keeps an interruption inside the single reasoning block", () => {
     const rows = constructAssistantRows([
       assistant("msg_interrupted", [{ type: "reasoning", text: "thinking" }], {
         type: "MessageAbortedError",
@@ -498,6 +563,9 @@ describe("current session timeline rows", () => {
       assistant("msg_resumed", [{ type: "text", text: "Final answer." }]),
     ])
 
-    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPart", "TurnDivider", "AssistantPart"])
+    expect(rows.map((row) => row._tag)).toEqual(["UserMessage", "AssistantPreamble", "AssistantPart"])
+    const preamble = rows[1]
+    if (preamble?._tag !== "AssistantPreamble") throw new Error("expected assistant preamble row")
+    expect(preamble.items.map((item) => item.type)).toEqual(["part", "interrupted"])
   })
 })

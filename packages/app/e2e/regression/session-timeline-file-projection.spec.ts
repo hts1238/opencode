@@ -13,7 +13,6 @@ test("renders completed write content", async ({ page }) => {
     settings: { editToolPartsExpanded: true },
   })
 
-  await openSteps(page, id)
   await expect(page.locator(`[data-timeline-part-id="${id}"] [data-component="write-content"]`)).toBeVisible()
 })
 
@@ -49,20 +48,12 @@ test("renders a completed single-file patch", async ({ page }) => {
     settings: { editToolPartsExpanded: true },
   })
 
-  await openSteps(page, id)
   const wrapper = page.locator(`[data-timeline-part-id="${id}"]`)
   const tool = wrapper.locator(
     ':scope > [data-component="apply-patch-tool"] > [data-component="collapsible"] > [data-slot="collapsible-trigger"]',
   )
-  if ((await tool.getAttribute("aria-expanded")) !== "true") await tool.click()
   const file = wrapper.locator('[data-scope="apply-patch"] [data-slot="accordion-trigger"]')
-  if ((await file.getAttribute("aria-expanded")) !== "true") await file.click()
-  await expect(wrapper.locator('[data-component="apply-patch-file-diff"]')).toBeVisible()
+  await expect(tool).toHaveAttribute("aria-expanded", "true")
+  await expect(file).toHaveAttribute("aria-expanded", "true")
+  await expect(wrapper.locator('[data-component="apply-patch-file-diff"]')).toBeVisible({ timeout: 30_000 })
 })
-
-async function openSteps(page: Parameters<typeof setupTimeline>[0], partID: string) {
-  await page
-    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
-    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
-    .click()
-}

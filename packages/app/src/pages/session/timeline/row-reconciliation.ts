@@ -7,13 +7,12 @@ type PriorContext = { index: number; userMessageID: string; group: ContextGroup 
 export function reuseTimelineRows(previous: TimelineRow.TimelineRow[] | undefined, rows: TimelineRow.TimelineRow[]) {
   if (!previous?.length) return rows
   const byKey = new Map(previous.map((row) => [TimelineRow.key(row), row] as const))
-  const toolGroupByKey = new Map<string, PartGroup>()
+  const groupByKey = new Map<string, PartGroup>()
   const contextByPart = new Map<string, PriorContext>()
   const previousContextKeys = new Set<string>()
   let contextIndex = 0
   previous.forEach((row) => {
-    if (row._tag === "AssistantToolGroup")
-      row.groups.forEach((group) => toolGroupByKey.set(contextKey(row.userMessageID, group.key), group))
+    partGroups(row).forEach((group) => groupByKey.set(contextKey(row.userMessageID, group.key), group))
     contextGroups(row).forEach((group) => {
       const prior = { index: contextIndex, userMessageID: row.userMessageID, group }
       previousContextKeys.add(contextKey(row.userMessageID, group.key))
@@ -30,10 +29,7 @@ export function reuseTimelineRows(previous: TimelineRow.TimelineRow[] | undefine
   })
   const claimed = new Set<string>()
   const next = rows.map((input, index) => {
-    const row = reuseToolGroups(
-      toolGroupByKey,
-      stabilizeContextKeys(contextByPart, reserved, input, index, claimed),
-    )
+    const row = reusePartGroups(groupByKey, stabilizeContextKeys(contextByPart, reserved, input, index, claimed))
     const existing = byKey.get(TimelineRow.key(row))
     if (!existing) return row
     return TimelineRow.equals(existing, row) ? existing : row
@@ -42,14 +38,24 @@ export function reuseTimelineRows(previous: TimelineRow.TimelineRow[] | undefine
   return next
 }
 
-function reuseToolGroups(toolGroupByKey: Map<string, PartGroup>, row: TimelineRow.TimelineRow) {
-  if (row._tag !== "AssistantToolGroup") return row
-  const groups = row.groups.map((group) => {
-    const previous = toolGroupByKey.get(contextKey(row.userMessageID, group.key))
+function reusePartGroups(groupByKey: Map<string, PartGroup>, row: TimelineRow.TimelineRow) {
+  const reuse = (group: PartGroup) => {
+    const previous = groupByKey.get(contextKey(row.userMessageID, group.key))
     return previous && sameGroup(previous, group) ? previous : group
+  }
+  if (row._tag === "AssistantToolGroup") {
+    const groups = row.groups.map(reuse)
+    if (groups.every((group, index) => group === row.groups[index])) return row
+    return new TimelineRow.AssistantToolGroup({ ...row, groups })
+  }
+  if (row._tag !== "AssistantPreamble") return row
+  const items = row.items.map((item) => {
+    if (item.type !== "part") return item
+    const group = reuse(item.group)
+    return group === item.group ? item : { ...item, group }
   })
-  if (groups.every((group, index) => group === row.groups[index])) return row
-  return new TimelineRow.AssistantToolGroup({ ...row, groups })
+  if (items.every((item, index) => item === row.items[index])) return row
+  return new TimelineRow.AssistantPreamble({ ...row, items })
 }
 
 function sameGroup(a: PartGroup, b: PartGroup) {
@@ -74,21 +80,49 @@ function stabilizeContextKeys(
     if (group === row.group) return row
     return new TimelineRow.AssistantPart({ ...row, group })
   }
-  if (row._tag !== "AssistantToolGroup") return row
-  const groups = row.groups.map((group, groupIndex) =>
-    group.type === "context"
-      ? stabilizeContextGroup(
-          contextByPart,
-          reserved,
-          row.userMessageID,
-          group,
-          `${rowIndex}:${groupIndex}`,
-          claimed,
-        )
-      : group,
+  if (row._tag === "AssistantToolGroup") {
+    const groups = stabilizeContextList(contextByPart, reserved, row.userMessageID, row.groups, rowIndex, claimed)
+    if (groups.every((group, index) => group === row.groups[index])) return row
+    return new TimelineRow.AssistantToolGroup({ ...row, groups })
+  }
+  if (row._tag !== "AssistantPreamble") return row
+  const groups = stabilizeContextList(contextByPart, reserved, row.userMessageID, partGroups(row), rowIndex, claimed)
+  let groupIndex = 0
+  const items = row.items.map((item) =>
+    item.type === "part" ? { ...item, group: groups[groupIndex++] ?? item.group } : item,
   )
-  if (groups.every((group, index) => group === row.groups[index])) return row
-  return new TimelineRow.AssistantToolGroup({ ...row, groups })
+  if (
+    items.every((item, index) => {
+      const previous = row.items[index]
+      return item.type !== "part" || (previous?.type === "part" && item.group === previous.group)
+    })
+  )
+    return row
+  return new TimelineRow.AssistantPreamble({ ...row, items })
+}
+
+function stabilizeContextList(
+  contextByPart: Map<string, PriorContext>,
+  reserved: Map<string, string>,
+  userMessageID: string,
+  groups: PartGroup[],
+  rowIndex: number,
+  claimed: Set<string>,
+) {
+  let contextIndex = 0
+  return groups.map((group) => {
+    if (group.type !== "context") return group
+    const result = stabilizeContextGroup(
+      contextByPart,
+      reserved,
+      userMessageID,
+      group,
+      `${rowIndex}:${contextIndex}`,
+      claimed,
+    )
+    contextIndex += 1
+    return result
+  })
 }
 
 function stabilizeContextGroup(
@@ -116,9 +150,13 @@ function stabilizeContextGroup(
 }
 
 function contextGroups(row: TimelineRow.TimelineRow) {
-  if (row._tag === "AssistantPart" && row.group.type === "context") return [row.group]
-  if (row._tag === "AssistantToolGroup")
-    return row.groups.filter((group): group is ContextGroup => group.type === "context")
+  return partGroups(row).filter((group): group is ContextGroup => group.type === "context")
+}
+
+function partGroups(row: TimelineRow.TimelineRow) {
+  if (row._tag === "AssistantPart") return [row.group]
+  if (row._tag === "AssistantToolGroup") return row.groups
+  if (row._tag === "AssistantPreamble") return row.items.flatMap((item) => (item.type === "part" ? [item.group] : []))
   return []
 }
 

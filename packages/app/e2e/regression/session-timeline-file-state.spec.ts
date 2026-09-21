@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test"
 import {
   assistantMessage,
   partUpdated,
+  reasoningPart,
   setupTimeline,
+  textPart,
   toolPart,
   userMessage,
 } from "../performance/timeline-stability/fixture"
@@ -14,7 +16,6 @@ test("updates edit diagnostics without resetting manual collapse state", async (
     messages: [userMessage(), assistantMessage([base])],
     settings: { editToolPartsExpanded: true },
   })
-  await openSteps(page, editID)
   const trigger = page.locator(`[data-timeline-part-id="${editID}"] [data-slot="collapsible-trigger"]`)
   await trigger.click()
   await expect(trigger).toHaveAttribute("aria-expanded", "false")
@@ -45,7 +46,6 @@ test("preserves nested patch file state through outer collapse and reopen", asyn
     ],
     settings: { editToolPartsExpanded: true },
   })
-  await openSteps(page, patchID)
   const wrapper = page.locator(`[data-timeline-part-id="${patchID}"]`)
   const outer = wrapper.locator(
     ':scope > [data-component="apply-patch-tool"] > [data-component="collapsible"] > [data-slot="collapsible-trigger"]',
@@ -60,12 +60,40 @@ test("preserves nested patch file state through outer collapse and reopen", asyn
   await expect(deleted.getByRole("button")).toHaveAttribute("aria-expanded", "true")
 })
 
-async function openSteps(page: Parameters<typeof setupTimeline>[0], partID: string) {
-  await page
-    .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids*="${partID}"]`)
-    .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
-    .click()
-}
+test("preserves nested patch state when a later text extends reasoning", async ({ page }) => {
+  const patchID = "prt_02_streaming_patch"
+  const files = [patchFile("src/a.ts", "update"), patchFile("src/old.ts", "delete")]
+  const timeline = await setupTimeline(page, {
+    messages: [
+      userMessage(),
+      assistantMessage([
+        reasoningPart("prt_01_streaming_reasoning", "Inspecting files"),
+        toolPart(
+          patchID,
+          "apply_patch",
+          "completed",
+          { files: files.map((file) => file.filePath) },
+          { metadata: { files } },
+        ),
+        textPart("prt_03_streaming_progress", "Progress update"),
+      ]),
+    ],
+    settings: { editToolPartsExpanded: true, showReasoningSummaries: true },
+  })
+  await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
+  const wrapper = page.locator(`[data-timeline-part-id="${patchID}"]`)
+  const deleted = wrapper.locator('[data-scope="apply-patch"] [data-type="delete"]')
+  await deleted.getByRole("button").click()
+  await expect(deleted.getByRole("button")).toHaveAttribute("aria-expanded", "true")
+
+  await timeline.send(partUpdated(textPart("prt_04_streaming_final", "Final response")), 300)
+
+  await expect(page.getByText("Final response", { exact: true })).toBeVisible()
+  await expect(
+    page.locator('[data-slot="assistant-preamble-toggle"]:not([data-position="end"])'),
+  ).toHaveAttribute("aria-expanded", "true")
+  await expect(deleted.getByRole("button")).toHaveAttribute("aria-expanded", "true")
+})
 
 function patchFile(filePath: string, type: "add" | "update" | "delete") {
   return {

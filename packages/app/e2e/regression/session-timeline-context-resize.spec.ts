@@ -49,11 +49,12 @@ test.describe("regression: session timeline context group resize", () => {
 
   test("paints a stable exploring to explored transition", async ({ page }) => {
     const events: { directory: string; payload: Record<string, unknown> }[] = []
-    await page.setViewportSize({ width: 1400, height: 900 })
-    await mockServer(page, events, [
+    const fixtureMessages = [
       ...Array.from({ length: 8 }, (_, index) => turn(index, false)).flat(),
       ...turn(10, true, "running"),
-    ])
+    ]
+    await page.setViewportSize({ width: 1400, height: 900 })
+    await mockServer(page, events, fixtureMessages)
     await configurePage(page)
 
     await page.goto(`/${base64Encode(directory)}/session/${sessionID}`)
@@ -71,7 +72,7 @@ test.describe("regression: session timeline context group resize", () => {
         selector: `${contextSelector} [data-component="tool-status-title"]`,
         opacitySelectors: ['[data-slot="tool-status-active"]', '[data-slot="tool-status-done"]'],
       },
-      context: { selector: contextSelector, closest: '[data-timeline-row="AssistantToolGroup"]' },
+      context: { selector: contextSelector, closest: '[data-timeline-row="AssistantPreamble"]' },
       following: {
         selector: `[data-timeline-part-id="${followingTextID}"]`,
         closest: '[data-timeline-row="AssistantPart"]',
@@ -100,8 +101,12 @@ test.describe("regression: session timeline context group resize", () => {
       })
       await page.waitForTimeout(delay)
     }
+    fixtureMessages.splice(0, fixtureMessages.length, ...messages)
 
-    await expect(context.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Explored")
+    await expect.poll(() => events.length).toBe(0)
+    await expect(context.locator('[data-component="tool-status-title"]')).toHaveAttribute("aria-label", "Explored", {
+      timeout: 30_000,
+    })
     await page.waitForTimeout(700)
     const trace = await stopVisualProbe<keyof typeof regions>(page)
     const labels = trace.samples
@@ -141,7 +146,11 @@ async function configurePage(page: Page) {
 }
 
 async function openSteps(page: Page) {
-  await page
+  const row = page.locator(
+    `[data-timeline-row="AssistantPreamble"][data-message-id="${id("msg_user", 10)}"]`,
+  )
+  await row.getByRole("button", { name: "Show reasoning", exact: true }).click()
+  await row
     .locator(`[data-component="assistant-tool-group"][data-timeline-part-ids="${contextIDs.join(",")}"]`)
     .locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]')
     .click()
@@ -169,7 +178,7 @@ async function sampleExpansion(page: Page) {
         const text = document.querySelector<HTMLElement>(`[data-timeline-part-id="${followingTextID}"]`)
         const scroller = context?.closest<HTMLElement>(".scroll-view__viewport")
         const trigger = context?.querySelector<HTMLElement>('[data-slot="collapsible-trigger"]')
-        const contextRow = context?.closest<HTMLElement>('[data-timeline-row="AssistantToolGroup"]')
+        const contextRow = context?.closest<HTMLElement>('[data-timeline-row="AssistantPreamble"]')
         const textRow = text?.closest<HTMLElement>('[data-timeline-row="AssistantPart"]')
         if (!context || !text || !scroller || !trigger || !contextRow || !textRow)
           throw new Error("missing regression nodes")

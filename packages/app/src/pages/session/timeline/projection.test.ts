@@ -27,6 +27,22 @@ const toolGroup = (key: string, partIDs: string[], userMessageID = "user-1") =>
     previousAssistantPart: false,
   })
 
+const preamble = (key: string, partIDs: string[], userMessageID = "user-1") =>
+  new TimelineRow.AssistantPreamble({
+    userMessageID,
+    items: [
+      {
+        type: "part",
+        group: {
+          key,
+          type: "context",
+          refs: partIDs.map((partID) => ({ messageID: "assistant-1", partID })),
+        } satisfies PartGroup,
+      },
+    ],
+    previousAssistantPart: false,
+  })
+
 const user = (userMessageID = "user-1") => new TimelineRow.UserMessage({ userMessageID, anchor: true })
 const keys = (rows: TimelineRow.TimelineRow[]) => rows.map(TimelineRow.key)
 
@@ -138,5 +154,16 @@ describe("reuseTimelineRows", () => {
     expect(result[0]?._tag).toBe("AssistantToolGroup")
     if (result[0]?._tag !== "AssistantToolGroup") throw new Error("expected tool group")
     expect(result[0].groups[0]).toBe(previous.groups[0])
+  })
+
+  test("preserves a preamble context key when its first member is removed", () => {
+    const previous = preamble("context:a", ["a", "b"])
+    const result = reuseTimelineRows([previous], [preamble("context:b", ["b"])])
+
+    expect(result[0]?._tag).toBe("AssistantPreamble")
+    if (result[0]?._tag !== "AssistantPreamble") throw new Error("expected preamble")
+    const item = result[0].items[0]
+    if (item?.type !== "part") throw new Error("expected preamble part")
+    expect(item.group.key).toBe("context:a")
   })
 })

@@ -51,7 +51,7 @@ test.describe("session timeline projection", () => {
     await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
 
     const toolGroups = page.locator('[data-component="assistant-tool-group"]')
-    await expect(toolGroups).toHaveCount(3)
+    await expect(toolGroups).toHaveCount(2)
     await expect(page.locator('[data-timeline-part-id="prt_task"]')).toBeVisible()
     await expect(page.locator('[data-timeline-part-id="prt_question"]')).toBeVisible()
     await expect(page.locator('[data-timeline-part-id="prt_bash"]')).toBeHidden()
@@ -77,14 +77,14 @@ test.describe("session timeline projection", () => {
     await expect(page.locator('[data-timeline-part-id="prt_todo"]')).toHaveCount(0)
   })
 
-  test("collapses an alternating work chain into one reasoning and one steps block", async ({ page }) => {
+  test("nests a steps block inside the single reasoning block", async ({ page }) => {
     await setupTimeline(page, {
       messages: [
         userMessage(),
         assistantMessage([
           reasoningPart("prt_01_reasoning", "First reasoning"),
-          toolPart("prt_02_shell", "shell", "completed", { command: "pwd" }),
-          reasoningPart("prt_03_reasoning", "Second reasoning"),
+          reasoningPart("prt_02_reasoning", "Second reasoning"),
+          toolPart("prt_03_shell", "shell", "completed", { command: "pwd" }),
           toolPart("prt_04_skill", "skill", "completed", { name: "inspect" }),
           textPart("prt_05_final", "Final answer"),
         ]),
@@ -95,13 +95,59 @@ test.describe("session timeline projection", () => {
     const reasoning = page.getByRole("button", { name: "Show reasoning", exact: true })
     const steps = page.getByRole("button", { name: "Show steps", exact: true })
     await expect(reasoning).toHaveCount(1)
-    await expect(steps).toHaveCount(1)
+    await expect(steps).toHaveCount(0)
+    await expect(page.getByText("First reasoning", { exact: true })).toBeHidden()
+    await expect(page.getByText("Final answer", { exact: true })).toBeVisible()
     await reasoning.click()
-    await steps.click()
+    await expect(steps).toHaveCount(1)
+    await expect(steps).toBeVisible()
     await expect(page.getByText("First reasoning", { exact: true })).toBeVisible()
     await expect(page.getByText("Second reasoning", { exact: true })).toBeVisible()
-    await expect(page.locator('[data-timeline-part-id="prt_02_shell"]')).toBeVisible()
+    await steps.click()
+    await expect(page.locator('[data-timeline-part-id="prt_03_shell"]')).toBeVisible()
     await expect(page.locator('[data-timeline-part-id="prt_04_skill"]')).toBeVisible()
+  })
+
+  test("keeps steps on their side of the reasoning boundary", async ({ page }) => {
+    await setupTimeline(page, {
+      messages: [
+        userMessage(),
+        assistantMessage([
+          reasoningPart("prt_01_reasoning", "Inspecting the request"),
+          toolPart("prt_02_shell", "shell", "completed", { command: "pwd" }),
+          toolPart("prt_03_read", "read", "completed", { filePath: "src/a.ts" }),
+          textPart("prt_04_progress", "Still working"),
+          toolPart("prt_05_shell", "shell", "completed", { command: "git status" }),
+          toolPart("prt_06_read", "read", "completed", { filePath: "src/b.ts" }),
+          toolPart("prt_07_task", "task", "completed", {
+            description: "Review changes",
+            subagent_type: "explore",
+          }),
+          toolPart("prt_08_skill", "skill", "completed", { name: "inspect" }),
+          toolPart("prt_09_webfetch", "webfetch", "completed", { url: "https://example.com" }),
+        ]),
+      ],
+      settings: { showReasoningSummaries: true },
+    })
+
+    const nested = page.locator('[data-component="assistant-tool-group"][data-timeline-part-ids="prt_02_shell,prt_03_read"]')
+    const beforeTask = page.locator(
+      '[data-component="assistant-tool-group"][data-timeline-part-ids="prt_05_shell,prt_06_read"]',
+    )
+    const afterTask = page.locator(
+      '[data-component="assistant-tool-group"][data-timeline-part-ids="prt_08_skill,prt_09_webfetch"]',
+    )
+    await expect(page.getByRole("button", { name: "Show reasoning", exact: true })).toHaveCount(1)
+    await expect(page.getByText("Still working", { exact: true })).toBeVisible()
+    await expect(nested).toHaveCount(0)
+    await expect(beforeTask).toBeVisible()
+    await expect(page.locator('[data-timeline-part-id="prt_07_task"]')).toBeVisible()
+    await expect(afterTask).toBeVisible()
+
+    await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
+    await expect(nested).toBeVisible()
+    await expect(beforeTask).toBeVisible()
+    await expect(afterTask).toBeVisible()
   })
 
   test("projects gaps, dividers, assistant parts, and errors together", async ({ page }) => {
@@ -157,7 +203,9 @@ test.describe("session timeline projection", () => {
     const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
     await scroller.evaluate((element) => (element.scrollTop = 0))
 
-    await expect(page.locator('[data-timeline-row="TurnDivider"]')).toHaveCount(1)
+    await expect(page.locator('[data-timeline-row="TurnDivider"]')).toHaveCount(0)
+    await expect(page.getByText("Session compacted", { exact: true })).toHaveCount(0)
+    await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
     await expect(page.getByText("Session compacted", { exact: true })).toBeVisible()
     await expect(page.getByText("Visible provider failure")).toBeVisible()
     await scroller.evaluate((element) => (element.scrollTop = element.scrollHeight))
@@ -220,7 +268,7 @@ test.describe("session timeline projection", () => {
     await expect(page.getByText(/show all/i)).toBeVisible()
   })
 
-  test("renders interruption independently when the turn is not compacted", async ({ page }) => {
+  test("keeps a pre-final interruption inside the reasoning block", async ({ page }) => {
     const user = userMessage()
     const before = assistantMessage([{ id: "prt_before", type: "text", text: "Before" }], {
       id: "msg_1001_before",
@@ -232,11 +280,16 @@ test.describe("session timeline projection", () => {
     })
     await setupTimeline(page, { messages: [user, before, after] })
 
+    await expect(page.getByText("Before", { exact: true })).toBeHidden()
+    await expect(page.getByText("After", { exact: true })).toBeVisible()
+    await expect(page.getByText("Interrupted", { exact: true })).toHaveCount(0)
+    await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
+    await expect(page.getByText("Before", { exact: true })).toBeVisible()
     await expect(page.getByText("Interrupted", { exact: true })).toBeVisible()
     const rows = await page
-      .locator('[data-timeline-row="AssistantPart"], [data-timeline-row="TurnDivider"]')
+      .locator('[data-timeline-row="AssistantPreamble"], [data-timeline-row="AssistantPart"]')
       .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-timeline-row")))
-    expect(rows).toEqual(["AssistantPart", "TurnDivider", "AssistantPart"])
+    expect(rows).toEqual(["AssistantPreamble", "AssistantPart"])
   })
 
   test("renders user image, file attachment, file reference, and agent reference", async ({ page }) => {

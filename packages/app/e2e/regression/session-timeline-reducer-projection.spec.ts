@@ -24,7 +24,8 @@ test("groups singleton and separated context operations at correct boundaries", 
   await setupTimeline(page, { messages: [userMessage(), assistantMessage(parts)] })
 
   const toolGroups = page.locator('[data-component="assistant-tool-group"]')
-  await expect(toolGroups).toHaveCount(2)
+  await expect(toolGroups).toHaveCount(1)
+  await page.getByRole("button", { name: "Show reasoning", exact: true }).click()
   for (const toolGroup of await toolGroups.all()) {
     await toolGroup.locator('[data-slot="assistant-tool-group-toggle"][data-position="start"]').click()
   }
@@ -37,8 +38,9 @@ test("groups singleton and separated context operations at correct boundaries", 
   await expect(
     page.locator('.tool-collapsible[data-timeline-part-ids="prt_boundary_06_list"]'),
   ).toBeVisible()
+  await expect(page.locator('[data-timeline-row="AssistantPreamble"]')).toHaveCount(1)
   await expect(page.locator('[data-timeline-row="AssistantPart"]')).toHaveCount(1)
-  await expect(page.locator('[data-timeline-row="AssistantToolGroup"]')).toHaveCount(2)
+  await expect(page.locator('[data-timeline-row="AssistantToolGroup"]')).toHaveCount(1)
 })
 
 test("reducer-hardening: converges when idle arrives before final part and message completion", async ({ page }) => {

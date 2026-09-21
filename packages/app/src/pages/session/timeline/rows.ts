@@ -2,10 +2,10 @@ import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
 import type { SessionMessageInfo } from "@opencode-ai/client/promise"
 import { AssistantMessage, Part, SessionStatus, UserMessage } from "@opencode-ai/sdk/v2"
 import { groupParts, renderable, type PartGroup } from "@opencode-ai/session-ui/message-part"
-import { TimelineRow, type SummaryDiff } from "./timeline-row"
+import { TimelineRow, type AssistantTimelineItem, type SummaryDiff } from "./timeline-row"
 import { uniqueSummaryDiffs } from "./summary-diffs"
 
-export { TimelineRow, type SummaryDiff } from "./timeline-row"
+export { TimelineRow, type AssistantTimelineItem, type SummaryDiff } from "./timeline-row"
 
 export type TimelineRowMap = {
   TurnGap: { userMessageID: string }
@@ -29,7 +29,7 @@ export type TimelineRowMap = {
   }
   AssistantPreamble: {
     userMessageID: string
-    groups: PartGroup[]
+    items: AssistantTimelineItem[]
     previousAssistantPart: boolean
   }
   AssistantToolGroup: {
@@ -41,6 +41,48 @@ export type TimelineRowMap = {
   Retry: { userMessageID: string }
   DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
   Error: { userMessageID: string; text: string }
+}
+
+export type AssistantPartSection =
+  | { type: "part"; group: PartGroup }
+  | { type: "tools"; groups: PartGroup[] }
+
+export type AssistantSection =
+  | AssistantPartSection
+  | { type: "interrupted" }
+  | { type: "compaction"; id: string; summary: string }
+
+export function groupAssistantSteps(items: AssistantTimelineItem[], stepCount: (group: PartGroup) => number) {
+  const result: AssistantSection[] = []
+  let steps: PartGroup[] = []
+  let count = 0
+
+  const flush = () => {
+    if (steps.length === 0) return
+    if (count > 1) result.push({ type: "tools", groups: steps })
+    else result.push(...steps.map((group) => ({ type: "part" as const, group })))
+    steps = []
+    count = 0
+  }
+
+  items.forEach((item) => {
+    if (item.type !== "part") {
+      flush()
+      result.push(item)
+      return
+    }
+    const group = item.group
+    const next = stepCount(group)
+    if (next > 0) {
+      steps.push(group)
+      count += next
+      return
+    }
+    flush()
+    result.push({ type: "part", group })
+  })
+  flush()
+  return result
 }
 
 export namespace Timeline {
@@ -191,7 +233,7 @@ export namespace Timeline {
 
     const assistantPartRefs = contentMessages.flatMap((message, messageIndex) =>
       getMessageParts(message.id)
-        .filter((part) => renderable(part, true))
+        .filter((part) => renderable(part, showReasoning))
         .map((part) => ({ messageID: message.id, messageIndex, part })),
     )
     const assistantCompaction = assistantPartRefs.some((ref) => ref.part.type === "compaction")
@@ -199,7 +241,12 @@ export namespace Timeline {
       assistantPartRefs,
       compactions,
       interrupted && compactions.length === 0 && !assistantCompaction ? interruptedMessageIndex + 1 : undefined,
-    )
+    ).map((item): AssistantTimelineItem => {
+      if (item.type !== "part") return item
+      const part = assistantGroupPart(item.group, assistantPartRefs)
+      if (part?.type === "compaction") return { type: "compaction", id: part.id, summary: "" }
+      return item
+    })
     if (previousUserMessage) rows.push(new TimelineRow.TurnGap({ userMessageID: userMessage.id }))
 
     if (comments.length > 0 && !inlineComments)
@@ -217,8 +264,23 @@ export namespace Timeline {
     )
 
     const finalTextIndex = finalAssistantTextIndex(assistantItems, assistantPartRefs)
+    const preambleItems = finalTextIndex > 0 ? assistantItems.slice(0, finalTextIndex) : []
+    const collapsePreamble = preambleItems.length > 0
+    const responseItems = collapsePreamble ? assistantItems.slice(finalTextIndex) : assistantItems
     let assistantGroupIndex = 0
-    assistantSections(assistantItems, assistantPartRefs, finalTextIndex, showReasoning).forEach((item) => {
+
+    if (collapsePreamble) {
+      rows.push(
+        new TimelineRow.AssistantPreamble({
+          userMessageID: userMessage.id,
+          items: preambleItems,
+          previousAssistantPart: false,
+        }),
+      )
+      assistantGroupIndex += 1
+    }
+
+    groupAssistantSteps(responseItems, (group) => lowLevelToolCount(group, assistantPartRefs)).forEach((item) => {
       if (item.type === "interrupted") {
         rows.push(
           new TimelineRow.TurnDivider({
@@ -226,18 +288,6 @@ export namespace Timeline {
             label: "interrupted",
           }),
         )
-        return
-      }
-
-      if (item.type === "preamble") {
-        rows.push(
-          new TimelineRow.AssistantPreamble({
-            userMessageID: userMessage.id,
-            groups: item.groups,
-            previousAssistantPart: assistantGroupIndex > 0,
-          }),
-        )
-        assistantGroupIndex += 1
         return
       }
 
@@ -317,11 +367,7 @@ export namespace Timeline {
   }
 
   function finalAssistantTextIndex(
-    items: Array<
-      | { type: "part"; group: PartGroup }
-      | { type: "interrupted" }
-      | { type: "compaction"; id: string; summary: string }
-    >,
+    items: AssistantTimelineItem[],
     refs: Array<{ messageID: string; part: Part }>,
   ) {
     for (let index = items.length - 1; index >= 0; index--) {
@@ -368,80 +414,9 @@ export namespace Timeline {
     return result
   }
 
-  function assistantSections(
-    items: Array<
-      | { type: "part"; group: PartGroup }
-      | { type: "interrupted" }
-      | { type: "compaction"; id: string; summary: string }
-    >,
-    refs: Array<{ messageID: string; part: Part }>,
-    finalTextIndex: number,
-    showReasoning: boolean,
-  ) {
-    type Section =
-      | { type: "part"; group: PartGroup }
-      | { type: "interrupted" }
-      | { type: "preamble"; groups: PartGroup[] }
-      | { type: "tools"; groups: PartGroup[] }
-      | { type: "compaction"; id: string; summary: string }
-    const result: Section[] = []
-    const collapsePreamble =
-      finalTextIndex > 0 && !items.slice(0, finalTextIndex).some((item) => item.type === "interrupted")
-    let preamble: Extract<Section, { type: "preamble" }> | undefined
-    let tools: Extract<Section, { type: "tools" }> | undefined
-
-    const pushBoundary = (item: Extract<Section, { type: "part" | "interrupted" | "compaction" }>) => {
-      result.push(item)
-      preamble = undefined
-      tools = undefined
-    }
-
-    items.forEach((item, index) => {
-      if (item.type === "interrupted") {
-        pushBoundary(item)
-        return
-      }
-      if (item.type === "compaction") {
-        pushBoundary(item)
-        return
-      }
-
-      const part = assistantGroupPart(item.group, refs)
-      if (part?.type === "compaction") {
-        pushBoundary({ type: "compaction", id: part.id, summary: "" })
-        return
-      }
-      if (part?.type === "reasoning" && !showReasoning) return
-
-      const type = isLowLevelToolGroup(item.group, refs)
-        ? "tools"
-        : collapsePreamble && index < finalTextIndex && part?.type !== "tool"
-          ? "preamble"
-          : "part"
-      if (type === "part") {
-        pushBoundary(item)
-        return
-      }
-      if (type === "preamble") {
-        if (preamble) {
-          preamble.groups.push(item.group)
-          return
-        }
-        const section: Extract<Section, { type: "preamble" }> = { type, groups: [item.group] }
-        result.push(section)
-        preamble = section
-        return
-      }
-      if (tools) {
-        tools.groups.push(item.group)
-        return
-      }
-      const section: Extract<Section, { type: "tools" }> = { type, groups: [item.group] }
-      result.push(section)
-      tools = section
-    })
-
-    return result
+  function lowLevelToolCount(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
+    if (!isLowLevelToolGroup(group, refs)) return 0
+    return group.type === "context" ? group.refs.length : 1
   }
 
   function isLowLevelToolGroup(group: PartGroup, refs: Array<{ messageID: string; part: Part }>) {
