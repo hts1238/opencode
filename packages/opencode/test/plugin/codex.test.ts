@@ -155,10 +155,17 @@ describe("plugin.codex", () => {
     const provider = {
       models: {
         ...Object.fromEntries(
-          ["gpt-5.4", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.7-pro", "gpt-6-astra"].map((id) => [
-            id,
-            { id, api: { id }, limit, cost: {}, options: {} },
-          ]),
+          [
+            "gpt-5.4",
+            "gpt-5.5",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.7-pro",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
+          ].map((id) => [id, { id, api: { id }, limit, cost: {}, options: {} }]),
         ),
         "gpt-5.4-pro": {
           id: "gpt-5.4-pro",
@@ -187,6 +194,8 @@ describe("plugin.codex", () => {
     expect(models["gpt-5.4-pro"]).toBeUndefined()
     expect(models["gpt-5.7-pro"]).toBeDefined()
     expect(models["gpt-6-astra"]).toBeDefined()
+    expect(models["gpt-6-sol"]).toBeDefined()
+    expect(models["gpt-6-luna"]).toBeDefined()
     expect(models["gpt-5.6-sol-high"]).toBeDefined()
     expect(await hooks.provider!.models!(provider as never, { auth: { type: "api" } } as never)).toBe(
       provider.models as never,
