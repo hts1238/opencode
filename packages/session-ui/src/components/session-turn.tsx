@@ -254,7 +254,7 @@ export function SessionTurn(
       }, [])
       .reverse()
   })
-  const MAX_FILES = 10
+  const MAX_FILES = 0
   const edited = createMemo(() => diffs().length)
   const [state, setState] = createStore({
     showAll: false,

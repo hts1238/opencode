@@ -149,7 +149,7 @@ function TimelineThinkingRow(props: { reasoningHeading?: string; showReasoningSu
 
 function TimelineDiffSummaryRow(props: { diffs: SummaryDiff[] }) {
   const language = useLanguage()
-  const maxFiles = 10
+  const maxFiles = 0
   const [state, setState] = createStore({
     showAll: false,
     expanded: [] as string[],
