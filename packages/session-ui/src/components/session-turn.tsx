@@ -517,11 +517,6 @@ export function SessionTurn(
                         }}
                       </For>
                     </Accordion>
-                    <Show when={!showAll() && overflow() > 0}>
-                      <div data-slot="session-turn-diffs-more" onClick={toggleAll}>
-                        {i18n.t("ui.sessionTurn.diffs.more", { count: String(overflow()) })}
-                      </div>
-                    </Show>
                   </div>
                 </div>
               </Show>
