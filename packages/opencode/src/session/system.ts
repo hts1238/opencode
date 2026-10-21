@@ -22,7 +22,9 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Location } from "@opencode-ai/core/location"
 import { LocationServiceMap, locationServiceMapLayer } from "@opencode-ai/core/location-services"
 import { Reference } from "@opencode-ai/core/reference"
+import { PluginV2 } from "@opencode-ai/core/plugin"
 import { MCP } from "@/mcp"
+import { Config } from "@/config/config"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 
 export function provider(model: Provider.Model) {
@@ -64,13 +66,22 @@ const layer = Layer.effect(
     const skill = yield* Skill.Service
     const mcp = yield* MCP.Service
     const locations = yield* LocationServiceMap.Service
+    const config = yield* Config.Service
 
     return Service.of({
       environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
         const ctx = yield* InstanceState.context
-        const references = yield* Effect.gen(function* () {
-          return (yield* (yield* Reference.Service).list()).filter((reference) => reference.description !== undefined)
-        }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+        const cfg = yield* config.get()
+        // Preserve the legacy discovery path outside Git workspaces.
+        const references =
+          ctx.project.vcs !== "git" || Object.keys(cfg.references ?? cfg.reference ?? {}).length || cfg.plugin?.length
+            ? yield* Effect.gen(function* () {
+                const plugins = yield* PluginV2.Service
+                yield* plugins.wait(PluginV2.ID.make("core/config-reference"))
+                const references = yield* Reference.Service
+                return (yield* references.list()).filter((reference) => reference.description !== undefined)
+              }).pipe(Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(ctx.directory) }))))
+            : []
         return [
           [
             `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
@@ -148,7 +159,7 @@ const locationServiceMapNode = LayerNode.make({
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Skill.node, MCP.node, locationServiceMapNode],
+  deps: [Skill.node, MCP.node, Config.node, locationServiceMapNode],
 })
 
 export * as SystemPrompt from "./system"

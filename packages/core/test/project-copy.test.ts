@@ -3,7 +3,7 @@ import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
 import { eq } from "drizzle-orm"
-import { Effect, Fiber, Stream } from "effect"
+import { Deferred, Effect, Fiber, Stream } from "effect"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { AbsolutePath } from "@opencode-ai/core/schema"
@@ -75,6 +75,38 @@ function stored(projectID: Project.ID) {
 }
 
 describe("ProjectCopy", () => {
+  it.live("shares overlapping refreshes without caching later filesystem changes", () =>
+    Effect.gen(function* () {
+      const input = yield* setup()
+      const copy = yield* ProjectCopy.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const calls: string[] = []
+      yield* copy.register({
+        id: ProjectCopy.StrategyID.make("test/shared-refresh"),
+        create: () => Effect.die("unused"),
+        remove: () => Effect.die("unused"),
+        list: (directory) =>
+          Effect.gen(function* () {
+            calls.push(directory)
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            return []
+          }),
+      })
+      const first = yield* copy.refresh({ projectID: input.projectID }).pipe(Effect.forkScoped)
+      yield* Deferred.await(started)
+      const second = yield* copy
+        .refresh({ projectID: input.projectID })
+        .pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.succeed(release, undefined)
+      const results = yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+      expect(results[0]).toBe(results[1])
+      expect(calls).toEqual([input.sourceDirectory])
+      yield* copy.refresh({ projectID: input.projectID })
+      expect(calls).toEqual([input.sourceDirectory, input.sourceDirectory])
+    }),
+  )
   it.effect("accepts arbitrary non-empty strategy ids", () =>
     Effect.sync(() => {
       expect(String(ProjectCopy.StrategyID.make("acme/snapshot"))).toBe("acme/snapshot")

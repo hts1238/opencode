@@ -152,7 +152,8 @@ const scan = Effect.fnUntraced(function* (
       : pattern === OPENCODE_SKILL_PATTERN
         ? [path.join(root, "skill"), path.join(root, "skills")]
         : [root]
-  const matches = yield* Effect.forEach(roots, (directory) => SkillScan.scan(directory, false)).pipe(
+  const scanner = yield* SkillScan.Service
+  const matches = yield* Effect.forEach(roots, (directory) => scanner.scan(directory, false)).pipe(
     Effect.map((files) => files.flat()),
     Effect.catch((error) => {
       if (!opts?.scope) return Effect.die(error)
@@ -253,6 +254,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const events = yield* EventV2Bridge.Service
     const fsys = yield* FSUtil.Service
+    const scanner = yield* SkillScan.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
     const loadState = Effect.fn("Skill.state.load")(function* (
@@ -269,7 +271,7 @@ const layer = Layer.effect(
         ctx.directory,
         ctx.worktree,
         opts,
-      ).pipe(Effect.provideService(FSUtil.Service, fsys))
+      ).pipe(Effect.provideService(SkillScan.Service, scanner))
       const s: State = { skills: {}, dirs: new Set(discovered.dirs) }
       // Register the built-in skill BEFORE disk discovery so a user-disk
       // skill with the same name can override it.
@@ -358,7 +360,7 @@ export function fmt(list: Info[], opts: { verbose: boolean }) {
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, Global.node, RuntimeFlags.node],
+  deps: [Discovery.node, Config.node, EventV2Bridge.node, FSUtil.node, SkillScan.node, Global.node, RuntimeFlags.node],
 })
 
 export * as Skill from "."

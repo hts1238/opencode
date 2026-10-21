@@ -44,3 +44,20 @@ test("skill discovery bounds traversal while preserving linked skills and loose 
     path.join(root, "command.md"),
   )
 })
+
+test("shared skill discovery joins scans and observes later filesystem changes", async () => {
+  await using tmp = await tmpdir()
+  await fs.writeFile(path.join(tmp.path, "command.md"), "# Command")
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const scanner = yield* SkillScan.Service
+      const files = yield* Effect.all([scanner.scan(tmp.path), scanner.scan(tmp.path)], { concurrency: "unbounded" })
+      expect(files[0]).toBe(files[1])
+      expect(files[0]).toEqual([path.join(tmp.path, "command.md")])
+      expect(yield* scanner.scan(tmp.path, false)).toEqual([])
+      yield* Effect.promise(() => fs.mkdir(path.join(tmp.path, "added")))
+      yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "added", "SKILL.md"), "# New skill"))
+      expect(yield* scanner.scan(tmp.path)).toContain(path.join(tmp.path, "added", "SKILL.md"))
+    }).pipe(Effect.scoped, Effect.provide(AppNodeBuilder.build(SkillScan.node))),
+  )
+})

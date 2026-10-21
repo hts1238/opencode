@@ -5,7 +5,8 @@ import path from "path"
 import { AbsolutePath } from "../schema"
 import { FSUtil } from "../fs-util"
 import { Git } from "../git"
-import { makeLocationNode } from "../effect/app-node"
+import { makeGlobalNode, makeLocationNode } from "../effect/app-node"
+import { SharedTask } from "../effect/shared-task"
 import { Project } from "../project"
 import { ProjectDirectories } from "./directories"
 import { makeGitWorktreeStrategy } from "./copy-strategies"
@@ -110,15 +111,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pr
 export const refreshAfterBoot = Effect.gen(function* () {
   const location = yield* Location.Service
   const copies = yield* Service
-  yield* Effect.gen(function* () {
-    yield* Effect.logInfo("project copy refresh started", { projectID: location.project.id })
-    const result = yield* copies.refresh({ projectID: location.project.id })
-    yield* Effect.logInfo("project copy refresh done", {
-      projectID: location.project.id,
-      updated: result.updated,
-      removed: result.removed,
-    })
-  }).pipe(
+  yield* copies.refresh({ projectID: location.project.id }).pipe(
     Effect.catchCause((cause) => Effect.logWarning("project copy refresh failed", { cause })),
     Effect.forkScoped,
     Effect.asVoid,
@@ -213,6 +206,7 @@ const layer = Layer.effect(
     })
 
     const refresh = Effect.fn("ProjectCopy.refresh")(function* (input: RefreshInput) {
+      yield* Effect.logInfo("project copy refresh started", { projectID: input.projectID })
       const stored = yield* directories.list(input.projectID)
       const checked = yield* Effect.forEach(
         stored,
@@ -266,20 +260,23 @@ const layer = Layer.effect(
         removed: removed.filter((_, index) => result.removed[index]),
       }
       yield* changed(input.projectID, changes.updated.length > 0 || changes.removed.length > 0)
+      yield* Effect.logInfo("project copy refresh done", { projectID: input.projectID, ...changes })
       return changes
     })
+
+    const refreshShared = yield* SharedTask.make((projectID: Project.ID) => refresh({ projectID }))
 
     return Service.of({
       register,
       create,
       remove,
-      refresh,
+      refresh: (input) => refreshShared(input.projectID),
     })
   }),
 )
 
 export const locationLayer = layer
-export const node = makeLocationNode({
+export const node = makeGlobalNode({
   service: Service,
   layer: layer,
   deps: [FSUtil.node, Git.node, ProjectDirectories.node, EventV2.node, Database.node],

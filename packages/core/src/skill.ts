@@ -59,6 +59,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const discovery = yield* SkillDiscovery.Service
     const fs = yield* FSUtil.Service
+    const scanner = yield* SkillScan.Service
 
     const state = State.create<Data, Draft>({
       initial: () => ({ sources: [] }),
@@ -76,7 +77,7 @@ const layer = Layer.effect(
       if (source.type === "embedded") return [source.skill]
       const directories = source.type === "directory" ? [source.path] : yield* discovery.pull(source.url)
       for (const directory of directories) {
-        const files = yield* SkillScan.scan(directory).pipe(Effect.provideService(FSUtil.Service, fs))
+        const files = yield* scanner.scan(directory)
         for (const filepath of files.toSorted()) {
           const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (!content) continue
@@ -128,4 +129,8 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [SkillDiscovery.node, FSUtil.node] })
+export const node = makeLocationNode({
+  service: Service,
+  layer,
+  deps: [SkillDiscovery.node, FSUtil.node, SkillScan.node],
+})

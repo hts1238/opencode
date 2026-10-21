@@ -84,8 +84,38 @@ const paid = (providers: Record<string, { models: Record<string, { cost: { input
 
 const languageBaseURL = (language: unknown) => (language as { config: { baseURL: string } }).config.baseURL
 
-const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node])))
+const it = testEffect(
+  LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node, ModelsDev.node, CrossSpawnSpawner.node])),
+)
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
+
+it.instance(
+  "keeps model overrides isolated across workspaces sharing a catalog",
+  () =>
+    Effect.gen(function* () {
+      yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+      const provider = yield* Provider.Service
+      const source = yield* ModelsDev.Service
+      const original = Provider.catalogFromModelsDev(yield* source.get())
+      const second = yield* tmpdirScoped({
+        config: {
+          provider: { anthropic: { models: { "claude-sonnet-4-6": { name: "Second workspace" } } } },
+        },
+      })
+      const first = yield* provider.getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-6"))
+      const other = yield* provider
+        .getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-6"))
+        .pipe(provideInstanceEffect(second))
+      expect(first.name).toBe("First workspace")
+      expect(other.name).toBe("Second workspace")
+      expect(original.anthropic.models["claude-sonnet-4-6"].name).not.toBe(first.name)
+      expect(original.anthropic.models["claude-sonnet-4-6"].name).not.toBe(other.name)
+      expect(Provider.catalogFromModelsDev(yield* source.get())).toBe(original)
+      expect(yield* provider.getModel(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-sonnet-4-6"))).toBe(first)
+      expect(Provider.catalogFromModelsDev({ ...(yield* source.get()) })).not.toBe(original)
+    }),
+  { config: { provider: { anthropic: { models: { "claude-sonnet-4-6": { name: "First workspace" } } } } } },
+)
 
 const alphaProviderConfig = {
   provider: {

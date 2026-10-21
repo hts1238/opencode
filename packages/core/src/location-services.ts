@@ -105,10 +105,12 @@ export function buildLocationServiceMap(
               workspaceID: ref.workspaceID,
             }),
           ),
+          // Export the shared project API without rebuilding it inside each location.
+          Layer.provideMerge(Layer.effect(ProjectCopy.Service, ProjectCopy.Service)),
           Layer.provide(LayerNode.compile(location.hoisted)),
         )
       },
-      { idleTimeToLive: "60 minutes" },
+      { idleTimeToLive: "10 minutes" },
     ),
   )
 }

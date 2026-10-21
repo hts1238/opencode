@@ -1397,6 +1397,16 @@ export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
   }
 }
 
+const catalogs = new WeakMap<Record<string, ModelsDev.Provider>, Record<string, Info>>()
+
+export function catalogFromModelsDev(source: Record<string, ModelsDev.Provider>) {
+  const existing = catalogs.get(source)
+  if (existing) return existing
+  const catalog = mapValues(source, fromModelsDevProvider)
+  catalogs.set(source, catalog)
+  return catalog
+}
+
 function modeOptions(model: Model, body: Record<string, unknown> | undefined) {
   if (!body) return model.options
   const options = Object.fromEntries(
@@ -1453,8 +1463,19 @@ const layer = Layer.effect(
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
-        const catalog = mapValues(modelsDev, fromModelsDevProvider)
-        const database = mapValues(catalog, toPublicInfo)
+        const catalog = catalogFromModelsDev(modelsDev)
+        const database: Record<string, Info> = {}
+
+        // Most catalog providers are disconnected. Clone only providers a workspace actually uses or customizes.
+        function providerData(providerID: string) {
+          const existing = database[providerID]
+          if (existing) return existing
+          const base = catalog[providerID]
+          if (!base) return
+          const provider = toPublicInfo(base)
+          database[providerID] = provider
+          return provider
+        }
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1482,7 +1503,7 @@ const layer = Layer.effect(
             providers[providerID] = mergeDeep(existing, provider)
             return
           }
-          const match = database[providerID]
+          const match = providerData(providerID)
           if (!match) return
           // @ts-expect-error
           providers[providerID] = mergeDeep(match, provider)
@@ -1510,7 +1531,7 @@ const layer = Layer.effect(
           const providerID = ProviderV2.ID.make(p.id)
           if (disabled.has(providerID)) continue
 
-          const provider = database[providerID]
+          const provider = providerData(providerID)
           if (!provider) continue
           const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
 
@@ -1531,7 +1552,7 @@ const layer = Layer.effect(
 
         // extend database from config
         for (const [providerID, provider] of configProviders) {
-          const existing = database[providerID]
+          const existing = providerData(providerID)
           const parsed: Info = {
             id: ProviderV2.ID.make(providerID),
             name: provider.name ?? existing?.name ?? providerID,
@@ -1632,7 +1653,7 @@ const layer = Layer.effect(
 
         // load env
         const envs = yield* env.all()
-        for (const [id, provider] of Object.entries(database)) {
+        for (const [id, provider] of Object.entries({ ...catalog, ...database })) {
           const providerID = ProviderV2.ID.make(id)
           if (disabled.has(providerID)) continue
           const apiKey = provider.env.map((item) => envs[item]).find(Boolean)
@@ -1665,11 +1686,13 @@ const layer = Layer.effect(
           const stored = yield* auth.get(providerID).pipe(Effect.orDie)
           if (!stored) continue
           if (!plugin.auth.loader) continue
+          const data = providerData(providerID)
+          if (!data) continue
 
           const options = yield* Effect.promise(() =>
             plugin.auth!.loader!(
               () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              toPublicInfo(database[plugin.auth!.provider]),
+              toPublicInfo(data),
             ),
           )
           const opts = options ?? {}
@@ -1680,7 +1703,7 @@ const layer = Layer.effect(
         for (const [id, fn] of Object.entries(custom(dep))) {
           const providerID = ProviderV2.ID.make(id)
           if (disabled.has(providerID)) continue
-          const data = database[providerID]
+          const data = providerData(providerID)
           if (!data) {
             continue
           }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, LayerMap } from "effect"
 import type { Agent } from "../../src/agent/agent"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Skill } from "../../src/skill"
@@ -8,6 +8,9 @@ import { Permission } from "../../src/permission"
 import type { Provider } from "../../src/provider/provider"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
+import { Config } from "../../src/config/config"
+import { LocationServiceMap, type LocationServices } from "@opencode-ai/core/location-services"
+import { Location } from "@opencode-ai/core/location"
 import { testEffect } from "../lib/effect"
 
 const skills: Skill.Info[] = [
@@ -82,6 +85,50 @@ const it = testEffect(
       ),
     ],
   ]),
+)
+
+const lean = testEffect(
+  LayerNode.compile(SystemPrompt.node, [
+    [Config.node, Layer.mock(Config.Service, { get: () => Effect.succeed({}) })],
+    [Skill.node, Layer.mock(Skill.Service, {})],
+    [MCP.node, Layer.mock(MCP.Service, {})],
+    [
+      SystemPrompt.node.dependencies.find(
+        (node) => node.name === LocationServiceMap.Service.key,
+      )! as LayerNode.Node<LocationServiceMap.Service>,
+      Layer.effect(
+        LocationServiceMap.Service,
+        LayerMap.make(
+          (_ref: Location.Ref): Layer.Layer<LocationServices> =>
+            Layer.effectContext(Effect.die("Unexpected workspace initialization")),
+        ),
+      ),
+    ],
+  ]),
+)
+
+lean.instance(
+  "ordinary environment prompts do not initialize the full location runtime",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = yield* prompt.environment({ api: { id: "test-model" }, providerID: "test" } as Provider.Model)
+      expect(output.join("\n")).toContain("test-model")
+      expect(output.join("\n")).not.toContain("available_references")
+    }),
+  { git: true },
+)
+
+it.instance(
+  "environment prompts retain configured repository guidance",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = yield* prompt.environment({ api: { id: "test-model" }, providerID: "test" } as Provider.Model)
+      expect(output.join("\n")).toContain("<name>docs</name>")
+      expect(output.join("\n")).toContain("<description>Workspace documentation</description>")
+    }),
+  { git: true, config: { references: { docs: { path: "./docs", description: "Workspace documentation" } } } },
 )
 
 describe("session.system", () => {

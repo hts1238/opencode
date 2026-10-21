@@ -1,14 +1,15 @@
 import fs from "fs/promises"
 import path from "path"
 import { describe, expect } from "bun:test"
-import { DateTime, Effect, Equal, Hash, Schema } from "effect"
+import { DateTime, Effect, Equal, Exit, Hash, Layer, Schema, Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { Tool } from "@opencode-ai/core/tool/tool"
 import { define } from "@opencode-ai/plugin/v2/effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { LocationServiceMap } from "@opencode-ai/core/location-services"
+import { buildLocationServiceMap, LocationServiceMap } from "@opencode-ai/core/location-services"
 import { Location } from "@opencode-ai/core/location"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -31,12 +32,48 @@ import { Project } from "../src/project"
 import { Reference } from "../src/reference"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
+import { ProjectCopy } from "../src/project/copy"
+import { Watcher } from "../src/filesystem/watcher"
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([ApplicationTools.node, Database.node, EventV2.node, LocationServiceMap.node])),
 )
 
 describe("LocationServiceMap", () => {
+  it.effect("releases idle location resources while retaining services in use", () =>
+    Effect.gen(function* () {
+      const dir = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+      )
+      const released: string[] = []
+      const watcher = Layer.effect(
+        Watcher.Service,
+        Effect.gen(function* () {
+          const location = yield* Location.Service
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              released.push(location.directory)
+            }),
+          )
+          return Watcher.Service.of({})
+        }),
+      )
+      yield* Effect.gen(function* () {
+        const locations = yield* LocationServiceMap.Service
+        const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+        const active = yield* Scope.make()
+        yield* locations.contextEffect(ref).pipe(Effect.provideService(Scope.Scope, active))
+        yield* TestClock.adjust("11 minutes")
+        expect(released).toEqual([])
+        yield* Scope.close(active, Exit.void)
+        yield* TestClock.adjust("9 minutes")
+        expect(released).toEqual([])
+        yield* TestClock.adjust("2 minutes")
+        expect(released).toEqual([dir.path])
+      }).pipe(Effect.provide(buildLocationServiceMap([[Watcher.node, watcher]])))
+    }),
+  )
   it.live("reuses cached services for constructed and decoded location refs", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -91,6 +128,7 @@ describe("LocationServiceMap", () => {
               const catalog = yield* Catalog.Service
               yield* catalog.transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
               return {
+                copies: yield* ProjectCopy.Service,
                 providers: yield* catalog.provider.all(),
                 tools: yield* toolDefinitions(yield* ToolRegistry.Service),
               }
@@ -119,6 +157,7 @@ describe("LocationServiceMap", () => {
             "write",
           ])
           const allowedState = yield* update(allowed.path)
+          expect(allowedState.copies).toBe(blockedState.copies)
           expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
           expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
             "application_context",
