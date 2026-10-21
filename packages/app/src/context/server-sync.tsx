@@ -359,7 +359,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     paused,
     key: directoryKey,
     bootstrap: () => queryClient.fetchQuery({ queryKey: [serverSDK.scope, "bootstrap"] }),
-    bootstrapInstance,
+    bootstrapInstance: (directory) => bootstrapInstance(directory, true),
   })
 
   const children = createChildStoreManager({
@@ -477,11 +477,13 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
     return promise
   }
 
-  async function bootstrapInstance(directory: string) {
+  async function bootstrapInstance(directory: string, refresh = false): Promise<void> {
     const key = directoryKey(directory)
     if (!key) return
     const pending = booting.get(key)
-    if (pending) return pending
+    // Configuration/disposal events can arrive after an in-flight request read
+    // its data. Keep one fresh pass after it, while ordinary callers just join.
+    if (pending) return refresh ? pending.then(() => bootstrapInstance(directory)) : pending
 
     children.pin(key)
     const promise = Promise.resolve().then(async () => {
@@ -564,7 +566,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         event,
         project: globalStore.project,
         refresh: (reason) => {
-          if (recent) return
+          if (recent && !recoveryStore.running && reason === "server-connected") return
           void recovery.trigger({ reason, force: true })
         },
         setGlobalProject: setProjects,
@@ -659,7 +661,7 @@ export function createServerSyncContextInner(serverSDK: ServerSDK) {
         await bootstrap.refetch()
         const directories = Object.keys(children.children).filter(children.active)
         if (directories.length === 0) return
-        await Promise.all(directories.map((directory) => bootstrapInstance(directory)))
+        await Promise.all(directories.map((directory) => bootstrapInstance(directory, true)))
       } finally {
         bootingRoot = false
         setRecoveryStore(

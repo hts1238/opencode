@@ -37,7 +37,7 @@ export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly cleanup: () => Effect.Effect<void>
   readonly track: () => Effect.Effect<string | undefined>
-  readonly patch: (hash: string) => Effect.Effect<Patch>
+  readonly patch: (hash: string, to?: string) => Effect.Effect<Patch>
   readonly restore: (snapshot: string) => Effect.Effect<void>
   readonly revert: (patches: Patch[]) => Effect.Effect<void>
   readonly diff: (hash: string) => Effect.Effect<string>
@@ -341,12 +341,25 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
-        const patch = Effect.fnUntraced(function* (hash: string) {
+        const patch = Effect.fnUntraced(function* (hash: string, to?: string) {
+          if (to === hash) return { hash, files: [] }
           return yield* locked(
             Effect.gen(function* () {
-              yield* add()
+              // A completed step already has an immutable tree. Avoid scanning
+              // and staging the worktree again, including other sessions' edits.
+              if (!to) yield* add()
               const result = yield* git(
-                [...quote, ...args(["diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", "."])],
+                [
+                  ...quote,
+                  ...args([
+                    "diff",
+                    "--no-ext-diff",
+                    "--name-only",
+                    ...(to ? [hash, to] : ["--cached", hash]),
+                    "--",
+                    ".",
+                  ]),
+                ],
                 {
                   cwd: state.directory,
                 },
@@ -538,7 +551,14 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
           )
         })
 
+        // A weak entry reuses expensive patches without keeping large file contents
+        // alive. Ignore rules are still checked on every call, even for old trees.
+        const recentDiff: {
+          value?: { from: string; to: string; signature: string; result: WeakRef<FileDiff[]> }
+        } = {}
+
         const diffFull = Effect.fnUntraced(function* (from: string, to: string) {
+          if (from === to) return []
           return yield* locked(
             Effect.gen(function* () {
               type Row = {
@@ -727,13 +747,23 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 rows.push(...filtered)
               }
 
+              const signature = JSON.stringify(rows)
+              const cached = recentDiff.value
+              const hit =
+                cached?.from === from && cached.to === to && cached.signature === signature
+                  ? cached.result.deref()
+                  : undefined
+              if (hit) return hit.map((item) => ({ ...item }))
+
               const step = 100
+              const complete = { value: statuses.code === 0 && numstat.code === 0 }
               const patch = (file: string, before: string, after: string) =>
                 formatPatch(structuredPatch(file, file, before, after, "", "", { context: Number.MAX_SAFE_INTEGER }))
 
               for (let i = 0; i < rows.length; i += step) {
                 const run = rows.slice(i, i + step)
                 const text = yield* load(run)
+                if (!text) complete.value = false
 
                 for (const row of run) {
                   const hit = text?.get(row.file) ?? { before: "", after: "" }
@@ -748,7 +778,8 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 }
               }
 
-              return result
+              if (complete.value) recentDiff.value = { from, to, signature, result: new WeakRef(result) }
+              return result.map((item) => ({ ...item }))
             }),
           )
         })
@@ -774,8 +805,8 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
       track: Effect.fn("Snapshot.track")(function* () {
         return yield* InstanceState.useEffect(state, (s) => s.track())
       }),
-      patch: Effect.fn("Snapshot.patch")(function* (hash: string) {
-        return yield* InstanceState.useEffect(state, (s) => s.patch(hash))
+      patch: Effect.fn("Snapshot.patch")(function* (hash: string, to?: string) {
+        return yield* InstanceState.useEffect(state, (s) => s.patch(hash, to))
       }),
       restore: Effect.fn("Snapshot.restore")(function* (snapshot: string) {
         return yield* InstanceState.useEffect(state, (s) => s.restore(snapshot))

@@ -516,17 +516,24 @@ export function parts(messageID: MessageID) {
   })
 }
 
-export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: SessionID; messageID: MessageID }) {
-  const { db } = yield* Database.Service
-  const row = yield* db
+export const getInfo = Effect.fn("MessageV2.getInfo")(function* (input: {
+  sessionID: SessionID
+  messageID: MessageID
+}) {
+  const database = yield* Database.Service
+  const row = yield* database.db
     .select()
     .from(MessageTable)
     .where(and(eq(MessageTable.id, input.messageID), eq(MessageTable.session_id, input.sessionID)))
     .get()
     .pipe(Effect.orDie)
   if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
+  return info(row)
+})
+
+export const get = Effect.fn("MessageV2.get")(function* (input: { sessionID: SessionID; messageID: MessageID }) {
   return {
-    info: info(row),
+    info: yield* getInfo(input),
     parts: yield* parts(input.messageID),
   }
 })
@@ -772,7 +779,9 @@ export function fromError(
 }
 
 function isProviderHeaderTimeoutAbort(e: unknown): e is Error {
-  return e instanceof Error && e.name === "AbortError" && e.message.startsWith("Provider response headers timed out after ")
+  return (
+    e instanceof Error && e.name === "AbortError" && e.message.startsWith("Provider response headers timed out after ")
+  )
 }
 
 function isTimeoutError(e: Error) {

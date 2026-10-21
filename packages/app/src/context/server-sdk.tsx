@@ -145,6 +145,42 @@ export function coalesceServerEvents(events: QueuedServerEvent[]) {
   return output
 }
 
+export function createServerEventQueue(input: { hidden: () => boolean; emit: (events: QueuedServerEvent[]) => void }) {
+  let queue: QueuedServerEvent[] = []
+  let buffer: QueuedServerEvent[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let last = 0
+
+  const flush = () => {
+    if (timer) clearTimeout(timer)
+    timer = undefined
+    if (queue.length === 0) return
+    const events = queue
+    queue = buffer
+    buffer = events
+    queue.length = 0
+    last = Date.now()
+    input.emit(coalesceServerEvents(events))
+    buffer.length = 0
+  }
+
+  return {
+    flush,
+    push(event: QueuedServerEvent) {
+      const hidden = input.hidden()
+      enqueueServerEvent(queue, event)
+      // Completion, approvals, errors, and other state transitions remain
+      // immediate in the background, in order after any buffered text.
+      if (hidden && event.payload.type !== "message.part.delta" && !currentDelta(event.payload.current)) {
+        flush()
+        return
+      }
+      if (timer) return
+      timer = setTimeout(flush, Math.max(0, (hidden ? 100 : 16) - (Date.now() - last)))
+    },
+  }
+}
+
 function currentDelta(event: OpenCodeEvent | undefined): CurrentDelta | undefined {
   if (
     event?.type === "session.text.delta" ||
@@ -221,41 +257,13 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
     [key: string]: ServerEvent
   }>()
 
-  type Queued = QueuedServerEvent
-  const FLUSH_FRAME_MS = 16
   const STREAM_YIELD_MS = 8
   const RECONNECT_DELAY_MS = 250
 
-  let queue: Queued[] = []
-  let buffer: Queued[] = []
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let last = 0
-
-  const flush = () => {
-    if (timer) clearTimeout(timer)
-    timer = undefined
-
-    if (queue.length === 0) return
-
-    const events = queue
-    queue = buffer
-    buffer = events
-    queue.length = 0
-
-    last = Date.now()
-    const output = coalesceServerEvents(events)
-    batch(() => {
-      output.forEach((event) => emitter.emit(event.directory, event.payload))
-    })
-
-    buffer.length = 0
-  }
-
-  const schedule = () => {
-    if (timer) return
-    const elapsed = Date.now() - last
-    timer = setTimeout(flush, Math.max(0, FLUSH_FRAME_MS - elapsed))
-  }
+  const events = createServerEventQueue({
+    hidden: () => document.visibilityState === "hidden",
+    emit: (events) => batch(() => events.forEach((event) => emitter.emit(event.directory, event.payload))),
+  })
 
   let streamErrorLogged = false
   const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -280,18 +288,18 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
         abort.signal.addEventListener("abort", onAbort)
         try {
           const kind = await protocol
-          const events =
+          const stream =
             kind === "v1"
               ? (await eventSdk.global.event({ signal: attempt.signal })).stream
               : eventApi.event.subscribe({ signal: attempt.signal })
           let yielded = Date.now()
-          for await (const event of events) {
+          for await (const event of stream) {
             streamErrorLogged = false
             const legacy = "payload" in event
             if (legacy && event.payload.type === "sync") continue
             const directory = legacy ? (event.directory ?? "global") : (event.location?.directory ?? "global")
             const payload = legacy ? (event.payload as Event) : adaptServerEvent(event)
-            if (enqueueServerEvent(queue, { directory, payload })) schedule()
+            events.push({ directory, payload })
 
             if (Date.now() - yielded < STREAM_YIELD_MS) continue
             yielded = Date.now()
@@ -317,7 +325,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
     })().finally(() => {
       if (run !== current) return
       run = undefined
-      flush()
+      events.flush()
     })
     run = current
     return run
@@ -330,6 +338,9 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   }
 
   onMount(() => {
+    makeEventListener(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") events.flush()
+    })
     makeEventListener(window, "pagehide", stop)
     makeEventListener(window, "pageshow", (event) => resumeStreamAfterPageShow(event, start))
   })
@@ -337,7 +348,7 @@ function createServerSdkContextBase(server: ServerConnection.Any, scope: ServerS
   onCleanup(() => {
     stop()
     abort.abort()
-    flush()
+    events.flush()
   })
 
   const sdk = createSdkForServer({

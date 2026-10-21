@@ -79,6 +79,7 @@ describe("bootstrapDirectory", () => {
   test("uses legacy MCP endpoints while refreshing a v1 directory", async () => {
     const legacyConfigReads: string[] = []
     const mcpReads: string[] = []
+    let sessionLoads = 0
     const [store, setStore] = directoryState()
 
     await bootstrapDirectory({
@@ -130,17 +131,16 @@ describe("bootstrapDirectory", () => {
       store,
       setStore,
       vcsCache: { setStore() {} } as unknown as VcsCache,
-      loadSessions() {},
+      loadSessions() {
+        sessionLoads++
+      },
       translate: (key) => key,
       queryClient: new QueryClient(),
       protocol: Promise.resolve("v1"),
     })
 
-    expect(store.status).toBe("partial")
-
-    await new Promise((resolve) => setTimeout(resolve, 80))
-
     expect(store.status).toBe("complete")
+    expect(sessionLoads).toBe(1)
     expect(legacyConfigReads).toEqual(["directory"])
     expect(mcpReads.sort()).toEqual(["command", "resource", "status"])
   })
@@ -175,11 +175,46 @@ describe("bootstrapDirectory", () => {
       protocol: Promise.resolve("v2"),
     })
 
-    expect(store.status).toBe("partial")
-
-    await new Promise((resolve) => setTimeout(resolve, 80))
-
     expect(store.status).toBe("complete")
+  })
+
+  test("keeps the refresh in flight until background requests finish", async () => {
+    const [store, setStore] = directoryState()
+    const started = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<Awaited<ReturnType<ReferenceApi["list"]>>>()
+    let finished = false
+    const refresh = bootstrapDirectory({
+      directory: "/project",
+      scope: ServerScope.local,
+      mcp: false,
+      global: { config: {}, path: store.path, project: [{ id: "project", worktree: "/project" } as Project], provider },
+      sdk: {} as OpencodeClient,
+      api: {
+        ...api,
+        reference: {
+          list: () => {
+            started.resolve()
+            return gate.promise
+          },
+        },
+      },
+      store,
+      setStore,
+      vcsCache: { setStore() {} } as unknown as VcsCache,
+      loadSessions() {},
+      translate: (key) => key,
+      queryClient: new QueryClient(),
+      protocol: Promise.resolve("v2"),
+    }).then(() => {
+      finished = true
+    })
+    await started.promise
+    expect(store.status).toBe("partial")
+    expect(finished).toBe(false)
+    gate.resolve({ location: { directory: "/project", project: { id: "project", directory: "/project" } }, data: [] })
+    await refresh
+    expect(store.status).toBe("complete")
+    expect(finished).toBe(true)
   })
 })
 

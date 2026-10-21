@@ -485,7 +485,7 @@ const layer = Layer.effect(
             })
             yield* session.updateMessage(ctx.assistantMessage)
             if (ctx.snapshot) {
-              const patch = yield* snapshot.patch(ctx.snapshot)
+              const patch = yield* snapshot.patch(ctx.snapshot, completedSnapshot)
               if (patch.files.length) {
                 yield* session.updatePart({
                   id: PartID.ascending(),
@@ -594,7 +594,11 @@ const layer = Layer.effect(
         if (ctx.currentText) {
           const end = Date.now()
           ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
-          if (ctx.currentTextPersisted || ctx.currentText.text.length > 0 || !isOpenAIFinalAnswer(ctx.currentText.metadata)) {
+          if (
+            ctx.currentTextPersisted ||
+            ctx.currentText.text.length > 0 ||
+            !isOpenAIFinalAnswer(ctx.currentText.metadata)
+          ) {
             yield* session.updatePart(ctx.currentText)
           }
           ctx.currentText = undefined

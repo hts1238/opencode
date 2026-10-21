@@ -1,7 +1,69 @@
 import { describe, expect, test } from "bun:test"
-import { adaptServerEvent, coalesceServerEvents, enqueueServerEvent, resumeStreamAfterPageShow } from "./server-sdk"
+import {
+  adaptServerEvent,
+  coalesceServerEvents,
+  createServerEventQueue,
+  enqueueServerEvent,
+  resumeStreamAfterPageShow,
+} from "./server-sdk"
 import type { OpenCodeEvent } from "@opencode-ai/client/promise"
 import type { Event } from "@opencode-ai/sdk/v2/client"
+
+const delta = (value: string, field = "text", partID = "part") => ({
+  directory: "/repo",
+  payload: {
+    type: "message.part.delta",
+    properties: { sessionID: "ses", messageID: "msg", partID, field, delta: value },
+  } as Event,
+})
+
+describe("server event queue", () => {
+  test("delivers background completion and approvals immediately after buffered text", () => {
+    const emitted: Array<{ directory: string; payload: Event }> = []
+    const queue = createServerEventQueue({ hidden: () => true, emit: (events) => emitted.push(...events) })
+    queue.push(delta("hello "))
+    queue.push(delta("world"))
+    expect(emitted).toEqual([])
+    queue.push({
+      directory: "/repo",
+      payload: {
+        type: "session.status",
+        properties: { sessionID: "ses", status: { type: "idle" } },
+      } as Event,
+    })
+    expect(emitted.map((event) => event.payload.type)).toEqual(["message.part.delta", "session.status"])
+    expect(emitted[0].payload).toMatchObject({ properties: { delta: "hello world" } })
+    queue.push(delta("next"))
+    queue.push({ directory: "/repo", payload: { type: "permission.asked", properties: {} } as Event })
+    expect(emitted.slice(2).map((event) => event.payload.type)).toEqual(["message.part.delta", "permission.asked"])
+    queue.flush()
+    expect(emitted).toHaveLength(4)
+  })
+
+  test("flushes all buffered text when returning to the foreground", () => {
+    const state = { hidden: true }
+    const emitted: Array<{ directory: string; payload: Event }> = []
+    const queue = createServerEventQueue({ hidden: () => state.hidden, emit: (events) => emitted.push(...events) })
+    queue.push(delta("a"))
+    queue.push(delta("b"))
+    state.hidden = false
+    queue.flush()
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0].payload).toMatchObject({ properties: { delta: "ab" } })
+    queue.push(delta("c"))
+    queue.flush()
+    expect(emitted[1].payload).toMatchObject({ properties: { delta: "c" } })
+  })
+
+  test("continues delivering text while the page stays hidden", async () => {
+    const delivered = Promise.withResolvers<Array<{ directory: string; payload: Event }>>()
+    const queue = createServerEventQueue({ hidden: () => true, emit: delivered.resolve })
+    queue.push(delta("still "))
+    queue.push(delta("running"))
+    expect((await delivered.promise)[0].payload).toMatchObject({ properties: { delta: "still running" } })
+    queue.flush()
+  })
+})
 
 describe("resumeStreamAfterPageShow", () => {
   test("restarts a stream only after a back-forward cache restore", () => {
@@ -49,14 +111,6 @@ describe("adaptServerEvent", () => {
 })
 
 describe("coalesceServerEvents", () => {
-  const delta = (value: string, field = "text", partID = "part") => ({
-    directory: "/repo",
-    payload: {
-      type: "message.part.delta",
-      properties: { messageID: "msg", partID, field, delta: value },
-    } as Event,
-  })
-
   test("merges adjacent deltas for the same field", () => {
     const first = delta("hello ")
     const second = delta("world")

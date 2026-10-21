@@ -1104,6 +1104,56 @@ it.instance(
 )
 
 it.instance(
+  "completed-step patches use the captured tree without staging later edits",
+  withTrackedSnapshot(({ tmp, snapshot, before }) =>
+    Effect.gen(function* () {
+      yield* write(`${tmp.path}/a.txt`, "completed step\n")
+      const after = yield* snapshot.track()
+      yield* write(`${tmp.path}/later.txt`, "another session\n")
+      expect(yield* snapshot.patch(before, after)).toEqual({ hash: before, files: [fwd(tmp.path, "a.txt")] })
+      expect(yield* snapshot.patch(before, before)).toEqual({ hash: before, files: [] })
+      const current = yield* snapshot.patch(before)
+      expect(current.files).toEqual([fwd(tmp.path, "a.txt"), fwd(tmp.path, "later.txt")])
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
+  "repeated tree diffs preserve full context, caller isolation, and current ignore rules",
+  withTrackedSnapshot(({ tmp, snapshot }) =>
+    Effect.gen(function* () {
+      yield* write(`${tmp.path}/a.txt`, "first\nbefore\nlast\n")
+      const before = (yield* snapshot.track())!
+      yield* write(`${tmp.path}/a.txt`, "first\nchanged\nlast\n")
+      const after = yield* snapshot.track()
+      const first = yield* snapshot.diffFull(before, after!)
+      const expected = structuredClone(first)
+      expect(first[0].patch).toContain(" first")
+      expect(first[0].patch).toContain(" last")
+      first.splice(0, first.length)
+      expect(yield* snapshot.diffFull(before, after!)).toEqual(expected)
+
+      yield* write(`${tmp.path}/.gitattributes`, "a.txt binary\n")
+      expect((yield* snapshot.diffFull(before, after!))[0]).toMatchObject({ patch: "", additions: 0, deletions: 0 })
+      yield* write(`${tmp.path}/.gitattributes`, "")
+      expect(yield* snapshot.diffFull(before, after!)).toEqual(expected)
+
+      yield* write(`${tmp.path}/.gitignore`, "a.txt\n")
+      expect(yield* snapshot.diffFull(before, after!)).toEqual([])
+      yield* write(`${tmp.path}/.gitignore`, "")
+      expect(yield* snapshot.diffFull(before, after!)).toEqual(expected)
+      expect(
+        yield* Effect.all([snapshot.diffFull(before, after!), snapshot.diffFull(before, after!)], {
+          concurrency: "unbounded",
+        }),
+      ).toEqual([expected, expected])
+    }),
+  ),
+  { git: true },
+)
+
+it.instance(
   "diffFull with binary file changes",
   withTrackedSnapshot(({ tmp, snapshot, before }) =>
     Effect.gen(function* () {

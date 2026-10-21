@@ -82,6 +82,10 @@ export function createRecoveryCoordinator(input: {
       return lastRecoveredAt
     },
     trigger(input: { reason: RecoveryReason; force?: boolean }) {
+      // Returning focus while a refresh is still in flight can use that refresh.
+      // Reconnect/disposal events must still queue another pass to cover gaps.
+      if (running && (input.reason === "focus" || input.reason === "visibility" || input.reason === "pageshow"))
+        return running
       merge(input.reason, input.force === true)
       if (running || timer) return running ?? Promise.resolve()
       schedule()

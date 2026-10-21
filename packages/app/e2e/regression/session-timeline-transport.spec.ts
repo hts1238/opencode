@@ -22,7 +22,12 @@ test("keeps one connection open while delivering multiple events", async ({ page
 })
 
 test("delivers a burst from one stream chunk", async ({ page }) => {
-  const timeline = await setupTimeline(page)
+  const timeline = await setupTimeline(page, {
+    messages: [userMessage(), assistantMessage([textPart("prt_transport_burst_ready", "Ready for stream")])],
+  })
+  // A title and an open connection precede history hydration. Wait for the
+  // assistant that owns these parts before exercising live burst delivery.
+  await timeline.waitForPart("prt_transport_burst_ready")
   const acknowledgements = await timeline.transport.burst([
     partUpdated(textPart("prt_transport_burst_a", "burst a")),
     partUpdated(textPart("prt_transport_burst_b", "burst b")),

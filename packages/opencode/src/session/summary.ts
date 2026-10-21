@@ -7,6 +7,11 @@ import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
 import { Config } from "@/config/config"
 import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
+import { Database } from "@opencode-ai/core/database/database"
+import { MessageTable, PartTable } from "@opencode-ai/core/session/sql"
+import { and, eq, or, sql } from "drizzle-orm"
+import { MessageV2 } from "./message-v2"
+import { NotFoundError } from "@/storage/storage"
 
 function unquoteGitPath(input: string) {
   if (!input.startsWith('"')) return input
@@ -80,25 +85,20 @@ const layer = Layer.effect(
     const snapshot = yield* Snapshot.Service
     const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
+    const database = yield* Database.Service
     const locks = KeyedMutex.makeUnsafe<MessageID>()
 
+    const messageInfo = (input: { sessionID: SessionID; messageID: MessageID }) =>
+      MessageV2.getInfo(input).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.catchIf(NotFoundError.isInstance, () =>
+          sessions.get(input.sessionID).pipe(Effect.orDie, Effect.as(undefined)),
+        ),
+      )
+
     const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: SessionV1.WithParts[] }) {
-      let from: string | undefined
-      let to: string | undefined
-      for (const item of input.messages) {
-        if (!from) {
-          for (const part of item.parts) {
-            if (part.type === "step-start" && part.snapshot) {
-              from = part.snapshot
-              break
-            }
-          }
-        }
-        for (const part of item.parts) {
-          if (part.type === "step-finish" && part.snapshot) to = part.snapshot
-        }
-      }
-      if (from && to) return yield* snapshot.diffFull(from, to)
+      const range = snapshotRange(input.messages.flatMap((item) => item.parts))
+      if (range.from && range.to) return yield* snapshot.diffFull(range.from, range.to)
       return []
     })
 
@@ -119,18 +119,35 @@ const layer = Layer.effect(
       messageID: MessageID
     }) {
       if ((yield* config.get()).snapshot === false) return
-      const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-      if (!all.length) return
+      const target = yield* messageInfo(input)
+      if (!target || target.role !== "user") return
 
-      const messages = all.filter(
-        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
-      )
-      const target = messages.find((m) => m.info.id === input.messageID)
-      if (!target || target.info.role !== "user") return
-      const msgDiffs = yield* computeDiff({ messages })
-      if (sameDiffs(target.info.summary?.diffs, msgDiffs)) return
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
-      yield* sessions.updateMessage(target.info)
+      // Only step boundaries are needed; loading text and tool output makes each
+      // summary grow with the entire conversation rather than this user turn.
+      const parts = yield* database.db
+        .select({ data: PartTable.data })
+        .from(MessageTable)
+        .innerJoin(PartTable, eq(PartTable.message_id, MessageTable.id))
+        .where(
+          and(
+            eq(MessageTable.session_id, input.sessionID),
+            or(
+              eq(MessageTable.id, input.messageID),
+              and(
+                sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+                sql`json_extract(${MessageTable.data}, '$.parentID') = ${input.messageID}`,
+              ),
+            ),
+            sql`json_extract(${PartTable.data}, '$.type') IN ('step-start', 'step-finish')`,
+          ),
+        )
+        .orderBy(MessageTable.time_created, MessageTable.id, PartTable.id)
+        .all()
+        .pipe(Effect.orDie)
+      const range = snapshotRange(parts.map((part) => part.data))
+      const msgDiffs = range.from && range.to ? yield* snapshot.diffFull(range.from, range.to) : []
+      if (sameDiffs(target.summary?.diffs, msgDiffs)) return
+      yield* sessions.updateMessage({ ...target, summary: { ...target.summary, diffs: msgDiffs } })
     })
 
     const summarize: Interface["summarize"] = Effect.fn("SessionSummary.summarize")((input) =>
@@ -139,11 +156,9 @@ const layer = Layer.effect(
 
     const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
       if (!input.messageID) return []
-      const message = (yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)).find(
-        (item) => item.info.id === input.messageID,
-      )
-      if (!message || message.info.role !== "user") return []
-      const diffs = message.info.summary?.diffs ?? []
+      const message = yield* messageInfo({ sessionID: input.sessionID, messageID: input.messageID })
+      if (!message || message.role !== "user") return []
+      const diffs = message.summary?.diffs ?? []
       return diffs.map((item) => {
         if (item.file === undefined) return item
         const file = unquoteGitPath(item.file)
@@ -177,10 +192,17 @@ function sameDiffs(current: Snapshot.FileDiff[] | undefined, next: Snapshot.File
   })
 }
 
+function snapshotRange(parts: readonly { type: string; snapshot?: string }[]) {
+  return {
+    from: parts.find((part) => part.type === "step-start" && part.snapshot)?.snapshot,
+    to: parts.findLast((part) => part.type === "step-finish" && part.snapshot)?.snapshot,
+  }
+}
+
 export const node = LayerNode.make({
   service: Service,
   layer: layer,
-  deps: [Session.node, Snapshot.node, EventV2Bridge.node, Config.node],
+  deps: [Session.node, Snapshot.node, EventV2Bridge.node, Config.node, Database.node],
 })
 
 export * as SessionSummary from "./summary"
