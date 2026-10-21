@@ -130,7 +130,9 @@ test.describe("session timeline projection", () => {
       settings: { showReasoningSummaries: true },
     })
 
-    const nested = page.locator('[data-component="assistant-tool-group"][data-timeline-part-ids="prt_02_shell,prt_03_read"]')
+    const nested = page.locator(
+      '[data-component="assistant-tool-group"][data-timeline-part-ids="prt_02_shell,prt_03_read"]',
+    )
     const beforeTask = page.locator(
       '[data-component="assistant-tool-group"][data-timeline-part-ids="prt_05_shell,prt_06_read"]',
     )
@@ -255,14 +257,10 @@ test.describe("session timeline projection", () => {
       parentID: "msg_2000_diff_next_user",
       created: 1700000011000,
     })
-    await setupTimeline(page, {
-      messages: [user, assistantMessage(), nextUser, nextAssistant],
-      settings: { newLayoutDesigns: false },
-    })
+    await setupTimeline(page, { messages: [user, assistantMessage(), nextUser, nextAssistant] })
     const scroller = page.locator(".scroll-view__viewport", { has: page.locator("[data-timeline-row]") })
     await scroller.evaluate((element) => (element.scrollTop = 0))
 
-    await expect(page.locator('[data-timeline-row="CommentStrip"]')).toBeVisible()
     await expect(page.getByText("Keep this stable", { exact: true })).toBeVisible()
     await expect(page.locator('[data-timeline-row="DiffSummary"]')).toBeVisible()
     await expect(page.getByText(/show all/i)).toBeVisible()

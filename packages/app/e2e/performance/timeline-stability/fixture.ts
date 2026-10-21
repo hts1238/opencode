@@ -134,6 +134,7 @@ export async function setupTimeline(
           shellToolPartsExpanded: false,
           showReasoningSummaries: false,
           showSessionProgressBar: true,
+          layoutDesign: settings.newLayoutDesigns ? "new" : "legacy",
           ...settings,
         },
       }),

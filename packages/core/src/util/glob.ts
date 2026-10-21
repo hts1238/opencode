@@ -8,6 +8,8 @@ export namespace Glob {
     include?: "file" | "all"
     dot?: boolean
     symlink?: boolean
+    ignore?: string[]
+    maxDepth?: number
   }
 
   function toGlobOptions(options: Options): GlobOptions {
@@ -17,6 +19,8 @@ export namespace Glob {
       dot: options.dot,
       follow: options.symlink ?? false,
       nodir: options.include !== "all",
+      ignore: options.ignore,
+      maxDepth: options.maxDepth,
     }
   }
 

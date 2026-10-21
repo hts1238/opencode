@@ -13,7 +13,7 @@ import { Config } from "@/config/config"
 import { FrontmatterError } from "@opencode-ai/core/v1/config/error"
 import { ConfigMarkdown } from "@/config/markdown"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Glob } from "@opencode-ai/core/util/glob"
+import { SkillScan } from "@opencode-ai/core/skill/scan"
 import { Discovery } from "./discovery"
 import { isRecord } from "@/util/record"
 import { escapeHtml } from "@/util/html"
@@ -146,17 +146,14 @@ const scan = Effect.fnUntraced(function* (
   pattern: string,
   opts?: { dot?: boolean; scope?: string },
 ) {
-  const matches = yield* Effect.tryPromise({
-    try: () =>
-      Glob.scan(pattern, {
-        cwd: root,
-        absolute: true,
-        include: "file",
-        symlink: true,
-        dot: opts?.dot,
-      }),
-    catch: (error) => error,
-  }).pipe(
+  const roots =
+    pattern === EXTERNAL_SKILL_PATTERN
+      ? [path.join(root, "skills")]
+      : pattern === OPENCODE_SKILL_PATTERN
+        ? [path.join(root, "skill"), path.join(root, "skills")]
+        : [root]
+  const matches = yield* Effect.forEach(roots, (directory) => SkillScan.scan(directory, false)).pipe(
+    Effect.map((files) => files.flat()),
     Effect.catch((error) => {
       if (!opts?.scope) return Effect.die(error)
       return Effect.logError(`failed to scan ${opts.scope} skills`, { dir: root, error: error }).pipe(
@@ -240,7 +237,7 @@ const loadSkills = Effect.fnUntraced(function* (
   events: EventV2Bridge.Service["Service"],
 ) {
   yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
-    concurrency: "unbounded",
+    concurrency: 8,
     discard: true,
   })
 
@@ -272,7 +269,7 @@ const layer = Layer.effect(
         ctx.directory,
         ctx.worktree,
         opts,
-      )
+      ).pipe(Effect.provideService(FSUtil.Service, fsys))
       const s: State = { skills: {}, dirs: new Set(discovered.dirs) }
       // Register the built-in skill BEFORE disk discovery so a user-disk
       // skill with the same name can override it.

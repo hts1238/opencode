@@ -18,6 +18,7 @@ import { createSessionTabs } from "@/pages/session/helpers"
 import { extractPromptFromParts } from "@/utils/prompt"
 import { Message, Part, UserMessage } from "@opencode-ai/sdk/v2"
 import { useSessionLayout } from "@/pages/session/session-layout"
+import { useSessionArchive } from "@/pages/session/session-archive"
 import { createSessionOwnership } from "./session-ownership"
 import { useLocal } from "@/context/local"
 
@@ -52,6 +53,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const navigate = useNavigate()
   const { params, sessionKey, tabs, view } = useSessionLayout()
   const sessionOwnership = createSessionOwnership(sessionKey)
+  const sessionArchive = useSessionArchive()
   const openDialog = async <T,>(load: () => Promise<T>, show: (value: T) => void) => {
     const owner = sessionOwnership.capture()
     const value = await load()
@@ -100,7 +102,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const visibleUserMessages = () => {
     const revert = info()?.revert?.messageID
     if (!revert) return userMessages()
-    return userMessages().filter((m) => m.id < revert)
+    const boundary = userMessages().findIndex((message) => message.id === revert)
+    return boundary < 0 ? userMessages() : userMessages().slice(0, boundary)
   }
 
   const showAllFiles = () => {
@@ -337,7 +340,9 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const promptSession = prompt.capture()
     const revert = info()?.revert?.messageID
     const messages = userMessages()
-    const message = findLast(messages, (x) => !revert || x.id < revert)
+    const boundary = revert ? messages.findIndex((message) => message.id === revert) : messages.length
+    if (boundary < 0) return
+    const message = messages[boundary - 1]
     if (!message) return
     const parts = sync().data.part[message.id]
 
@@ -352,7 +357,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       updatePrompt: (promptSession) => {
         if (parts) promptSession.set(extractPromptFromParts(parts, { directory }))
       },
-      updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id < message.id)),
+      updateViewport: () => setActiveMessage(messages[boundary - 2]),
     })
   }
 
@@ -367,14 +372,16 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const revertMessageID = info()?.revert?.messageID
     if (!revertMessageID) return
 
-    const next = messages.find((x) => x.id > revertMessageID)
+    const boundary = messages.findIndex((message) => message.id === revertMessageID)
+    if (boundary < 0) return
+    const next = messages[boundary + 1]
     if (!next) {
       await runCommand({
         owner,
         prompt: promptSession,
         request: () => session.revert.clear({ sessionID }),
         updatePrompt: (promptSession) => promptSession.reset(),
-        updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id >= revertMessageID)),
+        updateViewport: () => setActiveMessage(messages.at(-1)),
       })
       return
     }
@@ -384,7 +391,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       prompt: promptSession,
       request: () => session.revert.stage({ sessionID, messageID: next.id }),
       updatePrompt: () => undefined,
-      updateViewport: () => setActiveMessage(findLast(messages, (x) => x.id < next.id)),
+      updateViewport: () => setActiveMessage(messages[boundary]),
     })
   }
 
@@ -491,6 +498,16 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       slash: "export",
       disabled: !params.id,
       onSelect: exportSession,
+    }),
+    sessionCommand({
+      id: "session.archive",
+      title: language.t("command.session.archive"),
+      keybind: "mod+shift+backspace",
+      disabled: !params.id,
+      onSelect: () => {
+        const id = params.id
+        if (id) void sessionArchive.archive(id)
+      },
     }),
   ]
 

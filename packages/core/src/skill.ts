@@ -10,6 +10,7 @@ import { FSUtil } from "./fs-util"
 import { PermissionV2 } from "./permission"
 import { AbsolutePath } from "./schema"
 import { SkillDiscovery } from "./skill/discovery"
+import { SkillScan } from "./skill/scan"
 import { State } from "./state"
 
 export const DirectorySource = Skill.DirectorySource
@@ -75,9 +76,7 @@ const layer = Layer.effect(
       if (source.type === "embedded") return [source.skill]
       const directories = source.type === "directory" ? [source.path] : yield* discovery.pull(source.url)
       for (const directory of directories) {
-        const files = yield* fs
-          .glob("{*.md,**/SKILL.md}", { cwd: directory, absolute: true, include: "file", symlink: true, dot: true })
-          .pipe(Effect.catch(() => Effect.succeed([] as string[])))
+        const files = yield* SkillScan.scan(directory).pipe(Effect.provideService(FSUtil.Service, fs))
         for (const filepath of files.toSorted()) {
           const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (!content) continue

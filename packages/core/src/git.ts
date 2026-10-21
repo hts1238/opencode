@@ -458,7 +458,7 @@ const layer = Layer.effect(
       const maximum = input.maximumUntrackedFileBytes
       const skipped = maximum
         ? (yield* Effect.forEach(
-            untracked.filter((item) => allowed.includes(item)),
+            untracked.filter((item) => !ignored.has(item)),
             (item) =>
               fs.stat(path.join(input.repository.worktree, item)).pipe(
                 Effect.map((info) =>
@@ -469,7 +469,8 @@ const layer = Layer.effect(
             { concurrency: 8 },
           )).filter((item): item is RelativePath => item !== undefined)
         : []
-      const stage = allowed.filter((item) => !skipped.includes(RelativePath.make(item)))
+      const skippedPaths = new Set(skipped)
+      const stage = allowed.filter((item) => !skippedPaths.has(RelativePath.make(item)))
       const remove = [...ignored, ...skipped]
       if (remove.length)
         yield* repositoryOperation(

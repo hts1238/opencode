@@ -39,7 +39,7 @@ test("shows the not found fallback when the viewed session is deleted", async ({
   })
 
   await expect(page.getByText("This session cannot be found")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Close Tab" })).toBeVisible()
+  await expect(page.getByRole("button", { name: "Close Tab", exact: true })).toBeVisible()
   await expect(page.getByRole("heading", { name: taskDescription })).toHaveCount(0)
 })
 
@@ -183,7 +183,7 @@ async function configurePage(page: Page) {
   const server = `http://${process.env.PLAYWRIGHT_SERVER_HOST ?? "127.0.0.1"}:${process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"}`
   await page.addInitScript(
     ({ directory, server, sessionId }) => {
-      localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true } }))
+      localStorage.setItem("settings.v3", JSON.stringify({ general: { newLayoutDesigns: true, layoutDesign: "new" } }))
       localStorage.setItem(
         "opencode.global.dat:server",
         JSON.stringify({

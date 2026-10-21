@@ -131,25 +131,20 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
 
         const drop = Effect.fnUntraced(function* (files: string[]) {
           if (!files.length) return
-          yield* git(
-            [
-              ...cfg,
-              ...args(["rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"]),
-            ],
-            {
-              cwd: state.worktree,
-              stdin: encodeTopLevelLiteralPathspecs(files),
-            },
-          )
+          yield* git([...cfg, ...args(["update-index", "--force-remove", "-z", "--stdin"])], {
+            cwd: state.worktree,
+            stdin: files.map((file) => file.replace(/\/$/, "")).join("\0") + "\0",
+          })
         })
 
         const stage = Effect.fnUntraced(function* (files: string[]) {
           if (!files.length) return
           const result = yield* git(
-            [...cfg, ...args(["add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul"])],
+            [...cfg, ...args(["update-index", "--add", "--remove", "--replace", "-z", "--stdin"])],
             {
               cwd: state.worktree,
-              stdin: encodeTopLevelLiteralPathspecs(files),
+              // update-index reads literal paths and avoids git add's quadratic pathspec matching.
+              stdin: files.map((file) => file.replace(/\/$/, "")).join("\0") + "\0",
             },
           )
           if (result.code === 0) return

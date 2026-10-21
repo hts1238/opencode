@@ -6,6 +6,7 @@ import { usePrompt } from "@/context/prompt"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useProviders } from "@/hooks/use-providers"
+import { resolveDefaultModel } from "@/hooks/provider-catalog"
 
 export function createPromptModelSelection(input: { agent: () => { model?: ModelKey; variant?: string } | undefined }) {
   const sdk = useSDK()
@@ -21,11 +22,8 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
   }
 
   const configured = () => {
-    const value = sync().data.config.model
-    if (!value) return
-    const [providerID, ...rest] = value.split("/")
-    const modelID = rest.join("/")
-    const model = { providerID, modelID }
+    const model = resolveDefaultModel(providers.defaultModel(), sync().data.config.model)
+    if (!model) return
     if (valid(model)) return model
   }
 

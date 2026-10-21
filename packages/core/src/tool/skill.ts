@@ -6,6 +6,7 @@ import { Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { FSUtil } from "../fs-util"
 import { SkillV2 } from "../skill"
+import { SkillScan } from "../skill/scan"
 import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
 import { Tool } from "./tool"
@@ -84,7 +85,13 @@ const layer = Layer.effectDiscard(
                 const directory = path.dirname(skill.location)
                 const files =
                   path.basename(skill.location) === "SKILL.md"
-                    ? (yield* fs.glob("**/*", { cwd: directory, absolute: true, include: "file", dot: true }))
+                    ? (yield* fs.glob("**/*", {
+                        cwd: directory,
+                        absolute: true,
+                        include: "file",
+                        ignore: SkillScan.ignore,
+                        maxDepth: 6,
+                      }))
                         .filter((file) => path.basename(file) !== "SKILL.md")
                         .toSorted()
                         .slice(0, FILE_LIMIT)

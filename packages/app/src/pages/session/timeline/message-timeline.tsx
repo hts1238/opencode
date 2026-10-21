@@ -68,10 +68,10 @@ import { SessionContextUsage } from "@/components/session-context-usage"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { useSessionKey } from "@/pages/session/session-layout"
+import { useSessionArchive } from "@/pages/session/session-archive"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
-import { useTabs } from "@/context/tabs"
 import { legacySessionHref, requireServerKey, sessionHref } from "@/utils/session-route"
 import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
@@ -263,8 +263,8 @@ export function MessageTimeline(props: {
   const sdk = useSDK()
   const sync = useSync()
   const settings = useSettings()
-  const tabs = useTabs()
   const dialog = useDialog()
+  const sessionArchive = useSessionArchive()
   const language = useLanguage()
   const { params, sessionKey } = useSessionKey()
   const ownerSessionKey = sessionKey()
@@ -287,7 +287,9 @@ export function MessageTimeline(props: {
     const visible = new Set(props.userMessages.map((message) => message.id))
     const boundary = sessionMessages().find((message) => message.role === "user" && !visible.has(message.id))?.id
     const messages = sync().data.session_message[id] ?? []
-    return boundary ? messages.filter((message) => message.id < boundary) : messages
+    if (!boundary) return messages
+    const index = messages.findIndex((message) => message.id === boundary)
+    return index < 0 ? messages : messages.slice(0, index)
   })
   const info = createMemo(() => {
     const id = sessionID()
@@ -771,6 +773,7 @@ export function MessageTimeline(props: {
   }
 
   const saveTitleEditor = () => {
+    if (!title.editing) return
     const id = sessionID()
     if (!id) return
     if (titleMutation.isPending) return
@@ -782,25 +785,6 @@ export function MessageTimeline(props: {
     }
 
     titleMutation.mutate({ id, title: next })
-  }
-
-  const navigateAfterSessionRemoval = (sessionID: string, parentID?: string, nextSessionID?: string) => {
-    if (params.id !== sessionID) return
-    const href = (id: string) =>
-      params.serverKey ? sessionHref(requireServerKey(params.serverKey), id) : legacySessionHref(sdk().directory, id)
-    if (parentID) {
-      navigate(href(parentID))
-      return
-    }
-    if (nextSessionID) {
-      navigate(href(nextSessionID))
-      return
-    }
-    if (params.serverKey) {
-      tabs.newDraft({ server: requireServerKey(params.serverKey), directory: sdk().directory })
-      return
-    }
-    navigate(`/${params.dir}/session`)
   }
 
   const exportSession = async (sessionID: string) => {
@@ -824,36 +808,6 @@ export function MessageTimeline(props: {
         description: err instanceof Error ? err.message : language.t("toast.session.export.failed.description"),
       })
     }
-  }
-
-  const archiveSession = async (sessionID: string) => {
-    const session = sync().session.get(sessionID)
-    if (!session) return
-    if ((await sdk().protocol) !== "v1") return
-
-    const sessions = sync().data.session ?? []
-    const index = sessions.findIndex((s) => s.id === sessionID)
-    const nextSession = index === -1 ? undefined : (sessions[index + 1] ?? sessions[index - 1])
-
-    await sdk()
-      .client.session.update({ sessionID, directory: sdk().directory, time: { archived: Date.now() } })
-      .then(() => {
-        sync().set(
-          produce((draft) => {
-            const index = draft.session.findIndex((s) => s.id === sessionID)
-            if (index !== -1) draft.session.splice(index, 1)
-          }),
-        )
-        sync().session.evict(sessionID)
-        navigateAfterSessionRemoval(sessionID, session.parentID, nextSession?.id)
-        notifySessionTabsRemoved({ directory: sdk().directory, sessionIDs: [sessionID] })
-      })
-      .catch((err) => {
-        showToast({
-          title: language.t("common.requestFailed"),
-          description: errorMessage(err),
-        })
-      })
   }
 
   const deleteSession = async (sessionID: string) => {
@@ -905,7 +859,7 @@ export function MessageTimeline(props: {
       }
     }
 
-    navigateAfterSessionRemoval(sessionID, session.parentID, nextSession?.id)
+    sessionArchive.navigateAfterRemoval(sessionID, session.parentID, nextSession?.id)
 
     sync().set(
       produce((draft) => {
@@ -1714,6 +1668,7 @@ export function MessageTimeline(props: {
                         onInput={(event) => setTitle("draft", event.currentTarget.value)}
                         onKeyDown={(event) => {
                           event.stopPropagation()
+                          if (event.isComposing || event.keyCode === 229) return
                           if (event.key === "Enter") {
                             event.preventDefault()
                             void saveTitleEditor()
@@ -1724,7 +1679,7 @@ export function MessageTimeline(props: {
                             closeTitleEditor()
                           }
                         }}
-                        onBlur={closeTitleEditor}
+                        onBlur={saveTitleEditor}
                       />
                     </Show>
                   </Show>
@@ -1811,7 +1766,7 @@ export function MessageTimeline(props: {
                                 <DropdownMenu.Item onSelect={() => exportSession(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.export")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
-                                <DropdownMenu.Item onSelect={() => void archiveSession(id)}>
+                                <DropdownMenu.Item onSelect={() => void sessionArchive.archive(id)}>
                                   <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
                                 </DropdownMenu.Item>
                                 <DropdownMenu.Separator />
@@ -1885,7 +1840,7 @@ export function MessageTimeline(props: {
                               <MenuV2.Item onSelect={() => exportSession(id)}>
                                 {language.t("common.export")}...
                               </MenuV2.Item>
-                              <MenuV2.Item onSelect={() => void archiveSession(id)}>
+                              <MenuV2.Item onSelect={() => void sessionArchive.archive(id)}>
                                 {language.t("common.archive")}
                               </MenuV2.Item>
                               <MenuV2.Separator />

@@ -35,6 +35,7 @@ export interface Settings {
     showCustomAgents: boolean
     mobileTitlebarPosition: "top" | "bottom"
     newLayoutDesigns?: boolean
+    layoutDesign?: "legacy" | "new"
     layoutTransitionEligible?: boolean
     agentVisibilityInitialized?: boolean
     newInterfaceNoticeDismissed?: boolean
@@ -57,7 +58,7 @@ export interface Settings {
 export const monoDefault = "System Mono"
 export const sansDefault = "System Sans"
 export const terminalDefault = "JetBrainsMono Nerd Font Mono"
-// Keep the legacy interface active even for profiles previously migrated to the new layout.
+// Older releases wrote newLayoutDesigns during automatic upgrades. Only an explicit choice enables the new layout.
 export const newLayoutDesignsDefault = false
 export const oldInterfaceSunset = ((): Date | null => null)()
 const newLayoutDesignsUpgradeCutoff = "1.17.19"
@@ -251,15 +252,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
     const layoutTransitionClassified = createMemo(() => typeof store.general?.layoutTransitionEligible === "boolean")
     const layoutTransitionEligible = withFallback(() => store.general?.layoutTransitionEligible, false)
     const newInterfaceNoticeDismissed = withFallback(() => store.general?.newInterfaceNoticeDismissed, false)
-    const layoutUpgrade = createMemo(() =>
-      launchState.classified && !launchState.migrationApplied
-        ? shouldEnableNewLayout(launchState.previous, platform.version)
-        : false,
-    )
     const layoutTransition = createMemo(() =>
       layoutTransitionState(!!sunset, layoutTransitionEligible(), oldInterfaceRetired(), newInterfaceNoticeDismissed()),
     )
-    const newLayoutDesigns = createMemo(() => newLayoutDesignsDefault)
+    const newLayoutDesigns = createMemo(() => store.general?.layoutDesign === "new")
     const visible = (preference: () => boolean) => createMemo(() => !newLayoutDesigns() || preference())
     const initializeAgentVisibility = (existing: boolean) => {
       const initial = initialAgentVisibility(store.general?.agentVisibilityInitialized, existing, launchState.previous)
@@ -304,9 +300,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
 
     createEffect(() => {
       if (!ready() || !launchState.classified || launchState.migrationApplied) return
-      if (layoutUpgrade() && store.general?.newLayoutDesigns !== true) {
-        setStore("general", "newLayoutDesigns", true)
-      }
       setLaunchState("migrationApplied", true)
     })
 
@@ -414,9 +407,11 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         },
         newLayoutDesigns,
         setNewLayoutDesigns(value: boolean) {
-          const next = oldInterfaceRetired() ? true : value
-          if (newLayoutDesigns() === next) return
-          setStore("general", "newLayoutDesigns", next)
+          if (newLayoutDesigns() === value) return
+          batch(() => {
+            setStore("general", "layoutDesign", value ? "new" : "legacy")
+            setStore("general", "newLayoutDesigns", value)
+          })
           if (typeof window !== "undefined") setTimeout(() => window.location.reload())
         },
         layoutTransitionClassified,
@@ -426,7 +421,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
           setStore("general", "layoutTransitionEligible", eligible)
         },
         initializeAgentVisibility,
-        layoutTransitionAvailable: createMemo(() => ready() && layoutTransition().available),
+        layoutTransitionAvailable: createMemo(() => ready()),
         newInterfaceNoticeVisible: createMemo(() => ready() && layoutTransition().notice),
         dismissNewInterfaceNotice() {
           setStore("general", "newInterfaceNoticeDismissed", true)

@@ -131,6 +131,7 @@ export async function setupTimelineBenchmark(
         JSON.stringify({
           general: {
             newLayoutDesigns: input.newLayoutDesigns,
+            layoutDesign: input.newLayoutDesigns ? "new" : "legacy",
             editToolPartsExpanded: true,
             shellToolPartsExpanded: true,
             showReasoningSummaries: true,
