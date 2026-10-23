@@ -1,13 +1,14 @@
 import path from "path"
 import os from "os"
 import { randomUUID } from "crypto"
-import { Context, Effect, Function, Layer, Option, Schedule, Schema } from "effect"
+import { Clock, Context, Effect, Function, Layer, Option, Schedule, Schema } from "effect"
 import type { FileSystem, Scope } from "effect"
 import type { PlatformError } from "effect/PlatformError"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "./hash"
+import { LockHeartbeat } from "./lock-heartbeat"
 
 export namespace EffectFlock {
   // ---------------------------------------------------------------------------
@@ -49,7 +50,6 @@ export namespace EffectFlock {
   const retrySchedule = Schedule.exponential(BASE_DELAY_MS, 1.7).pipe(
     Schedule.either(Schedule.spaced(MAX_DELAY_MS)),
     Schedule.jittered,
-    Schedule.while((meta) => meta.elapsed < TIMEOUT_MS),
   )
 
   // ---------------------------------------------------------------------------
@@ -61,6 +61,7 @@ export namespace EffectFlock {
       token: Schema.String,
       pid: Schema.Number,
       hostname: Schema.String,
+      pidNamespace: Schema.optional(Schema.String),
       createdAt: Schema.String,
     }),
   )
@@ -86,11 +87,8 @@ export namespace EffectFlock {
   // Layer
   // ---------------------------------------------------------------------------
 
-  function wall() {
-    return performance.timeOrigin + performance.now()
-  }
-
-  const mtimeMs = (info: FileSystem.File.Info) => Option.getOrElse(info.mtime, () => new Date(0)).getTime()
+  const signature = (info: FileSystem.File.Info) =>
+    `${info.dev}:${Option.getOrUndefined(info.ino)}:${Option.getOrUndefined(info.mtime)?.getTime()}:${info.size}`
 
   const isPathGone = (e: PlatformError) => e.reason._tag === "NotFound" || e.reason._tag === "Unknown"
 
@@ -99,6 +97,7 @@ export namespace EffectFlock {
     Effect.gen(function* () {
       const global = yield* Global.Service
       const fs = yield* FSUtil.Service
+      const clock = yield* Clock.Clock
       const lockRoot = path.join(global.state, "locks")
       const hostname = os.hostname()
       const ensuredDirs = new Set<string>()
@@ -135,9 +134,12 @@ export namespace EffectFlock {
           ),
         )
 
-      const cleanStaleBreaker = Effect.fnUntraced(function* (breakerPath: string) {
+      const cleanStaleBreaker = Effect.fnUntraced(function* (
+        breakerPath: string,
+        unchanged: ReturnType<typeof LockHeartbeat.make>,
+      ) {
         const bs = yield* safeStat(breakerPath)
-        if (bs && wall() - mtimeMs(bs) > STALE_MS) yield* forceRemove(breakerPath)
+        if (bs && unchanged(breakerPath, signature(bs))) yield* forceRemove(breakerPath)
         return false
       })
 
@@ -147,26 +149,35 @@ export namespace EffectFlock {
         ensuredDirs.add(dir)
       })
 
-      const isStale = Effect.fnUntraced(function* (lockDir: string, heartbeatPath: string, metaPath: string) {
-        const now = wall()
+      const isStale = Effect.fnUntraced(function* (
+        lockDir: string,
+        heartbeatPath: string,
+        metaPath: string,
+        unchanged: ReturnType<typeof LockHeartbeat.make>,
+      ) {
+        const owner = yield* fs.readFileString(metaPath).pipe(
+          Effect.map(Schema.decodeUnknownOption(LockMetaJson)),
+          Effect.catch(() => Effect.succeed(Option.none())),
+        )
+        if (Option.isSome(owner) && LockHeartbeat.deadOwner(owner.value)) return true
 
         const hb = yield* safeStat(heartbeatPath)
-        if (hb) return now - mtimeMs(hb) > STALE_MS
+        if (hb) return unchanged(heartbeatPath, signature(hb))
 
         const meta = yield* safeStat(metaPath)
-        if (meta) return now - mtimeMs(meta) > STALE_MS
+        if (meta) return unchanged(metaPath, signature(meta))
 
         const dir = yield* safeStat(lockDir)
         if (!dir) return false
 
-        return now - mtimeMs(dir) > STALE_MS
+        return unchanged(lockDir, signature(dir))
       })
 
       // -- single lock attempt --
 
       type Handle = { token: string; metaPath: string; heartbeatPath: string; lockDir: string }
 
-      const tryAcquireLockDir = (lockDir: string, key: string) =>
+      const tryAcquireLockDir = (lockDir: string, key: string, unchanged: ReturnType<typeof LockHeartbeat.make>) =>
         Effect.gen(function* () {
           const token = randomUUID()
           const metaPath = path.join(lockDir, "meta.json")
@@ -176,7 +187,7 @@ export namespace EffectFlock {
           const created = yield* atomicMkdir(lockDir)
 
           if (!created) {
-            if (!(yield* isStale(lockDir, heartbeatPath, metaPath))) return yield* new NotAcquired()
+            if (!(yield* isStale(lockDir, heartbeatPath, metaPath, unchanged))) return yield* new NotAcquired()
 
             // Stale — race for breaker ownership
             const breakerPath = lockDir + ".breaker"
@@ -185,7 +196,7 @@ export namespace EffectFlock {
               Effect.as(true),
               Effect.catchIf(
                 (e) => e.reason._tag === "AlreadyExists",
-                () => cleanStaleBreaker(breakerPath),
+                () => cleanStaleBreaker(breakerPath, unchanged),
               ),
               Effect.catchIf(isPathGone, () => Effect.succeed(false)),
               Effect.orDie,
@@ -195,7 +206,7 @@ export namespace EffectFlock {
 
             // We own the breaker — double-check staleness, nuke, recreate
             const recreated = yield* Effect.gen(function* () {
-              if (!(yield* isStale(lockDir, heartbeatPath, metaPath))) return false
+              if (!(yield* isStale(lockDir, heartbeatPath, metaPath, unchanged))) return false
               yield* forceRemove(lockDir)
               return yield* atomicMkdir(lockDir)
             }).pipe(Effect.ensuring(forceRemove(breakerPath)))
@@ -206,7 +217,13 @@ export namespace EffectFlock {
           // We own the lock dir — write heartbeat + meta with exclusive create
           yield* exclusiveWrite(heartbeatPath, "", lockDir, "heartbeat already existed")
 
-          const metaJson = encodeMeta({ token, pid: process.pid, hostname, createdAt: new Date().toISOString() })
+          const metaJson = encodeMeta({
+            token,
+            pid: process.pid,
+            hostname,
+            pidNamespace: LockHeartbeat.pidNamespace,
+            createdAt: new Date().toISOString(),
+          })
           yield* exclusiveWrite(metaPath, metaJson, lockDir, "meta.json already existed")
 
           return { token, metaPath, heartbeatPath, lockDir } satisfies Handle
@@ -219,13 +236,17 @@ export namespace EffectFlock {
       // -- retry wrapper (preserves Handle type) --
 
       const acquireHandle = (lockfile: string, key: string): Effect.Effect<Handle, LockError> =>
-        tryAcquireLockDir(lockfile, key).pipe(
-          Effect.retry({
-            while: (err) => err._tag === "NotAcquired",
-            schedule: retrySchedule,
-          }),
-          Effect.catchTag("NotAcquired", () => Effect.fail(new LockTimeoutError({ key }))),
-        )
+        Effect.suspend(() => {
+          const now = () => Number(clock.currentTimeNanosUnsafe() / 1_000_000n)
+          const stop = now() + TIMEOUT_MS
+          return tryAcquireLockDir(lockfile, key, LockHeartbeat.make(STALE_MS, now)).pipe(
+            Effect.retry({
+              while: (err) => err._tag === "NotAcquired" && now() < stop,
+              schedule: retrySchedule,
+            }),
+            Effect.catchTag("NotAcquired", () => Effect.fail(new LockTimeoutError({ key }))),
+          )
+        })
 
       // -- release --
 
@@ -260,9 +281,10 @@ export namespace EffectFlock {
         const handle = yield* Effect.acquireRelease(acquireHandle(lockfile, key), (handle) => release(handle))
 
         // Heartbeat fiber — scoped, so it's interrupted before release runs
-        yield* fs
-          .utimes(handle.heartbeatPath, new Date(), new Date())
-          .pipe(Effect.ignore, Effect.repeat(Schedule.spaced(HEARTBEAT_MS)), Effect.forkScoped)
+        yield* Effect.suspend(() => {
+          const now = new Date(clock.currentTimeMillisUnsafe())
+          return fs.utimes(handle.heartbeatPath, now, now)
+        }).pipe(Effect.ignore, Effect.repeat(Schedule.spaced(HEARTBEAT_MS)), Effect.forkScoped)
       })
 
       const withLock: Interface["withLock"] = Function.dual(

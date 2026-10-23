@@ -6,6 +6,30 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Layer.empty)
 
 describe("State", () => {
+  it.effect("skips rebuilds during full teardown while still disposing registrations", () =>
+    Effect.gen(function* () {
+      const state = State.create({
+        initial: () => ({ values: [] as string[] }),
+        draft: (draft) => ({ add: (item: string) => draft.values.push(item) }),
+        finalize: (draft) =>
+          Effect.sync(() => {
+            draft.add("finalized")
+          }),
+      })
+      const scope = yield* Scope.make()
+      yield* state
+        .transform((draft) => {
+          draft.add("registered")
+        })
+        .pipe(Scope.provide(scope))
+      expect(state.get().values).toEqual(["registered", "finalized"])
+      yield* State.batch(Scope.close(scope, Exit.void), { reload: false })
+      expect(state.get().values).toEqual(["registered", "finalized"])
+      yield* state.reload()
+      expect(state.get().values).toEqual(["finalized"])
+    }),
+  )
+
   it.effect("commits a transform atomically when its updater is interrupted", () =>
     Effect.gen(function* () {
       const rebuilding = yield* Deferred.make<void>()

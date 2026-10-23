@@ -3,9 +3,9 @@ import { spawn } from "child_process"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Fiber, Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { testEffect } from "../lib/effect"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { Global } from "@opencode-ai/core/global"
@@ -110,7 +110,7 @@ const testGlobal = Global.layerWith({
   log: os.tmpdir(),
 })
 
-const testLayer = AppNodeBuilder.build(EffectFlock.node, [[Global.node, testGlobal]])
+const testLayer = LayerNode.compile(EffectFlock.node, [[Global.node, testGlobal]])
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -118,6 +118,32 @@ const testLayer = AppNodeBuilder.build(EffectFlock.node, [[Global.node, testGlob
 
 describe("util.effect-flock", () => {
   const it = testEffect(testLayer)
+
+  for (const offset of [-3_600_000, 3_600_000]) {
+    it.effect(`preserves a live owner after a clock correction of ${offset} ms`, () =>
+      Effect.gen(function* () {
+        const flock = yield* EffectFlock.Service
+        const tmp = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-clock-"))),
+          (dir) => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })),
+        )
+        const dir = path.join(tmp, "locks")
+        const key = "eflock:clock"
+        const owner = yield* Scope.make()
+        yield* Effect.addFinalizer((exit) => Scope.close(owner, exit))
+        yield* flock.acquire(key, dir).pipe(Scope.provide(owner))
+        yield* Effect.promise(() => {
+          const corrected = new Date(Date.now() + offset)
+          return fs.utimes(path.join(lock(dir, key), "heartbeat"), corrected, corrected)
+        })
+        const contender = yield* flock.withLock(Effect.void, key, dir).pipe(Effect.exit, Effect.forkScoped)
+        yield* TestClock.adjust("6 minutes")
+        const exit = yield* Fiber.join(contender)
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(EffectFlock.LockTimeoutError)
+      }),
+    )
+  }
 
   it.live(
     "acquire and release via scoped Effect",
@@ -195,7 +221,7 @@ describe("util.effect-flock", () => {
     }),
   )
 
-  it.live(
+  it.effect(
     "breaks stale lock dirs",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
@@ -211,20 +237,24 @@ describe("util.effect-flock", () => {
       })
 
       let hit = false
-      yield* flock.withLock(
-        Effect.sync(() => {
-          hit = true
-        }),
-        key,
-        dir,
-      )
+      const pending = yield* flock
+        .withLock(
+          Effect.sync(() => {
+            hit = true
+          }),
+          key,
+          dir,
+        )
+        .pipe(Effect.forkScoped)
+      yield* TestClock.adjust("1 second").pipe(Effect.repeat({ times: 120 }))
+      yield* Fiber.join(pending)
       expect(hit).toBe(true)
       yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
     }),
   )
 
-  it.live(
-    "recovers from stale breaker",
+  it.effect(
+    "recovers from stale breaker claims with future timestamps",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
       const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
@@ -236,19 +266,23 @@ describe("util.effect-flock", () => {
       yield* Effect.promise(async () => {
         await fs.mkdir(lockDir, { recursive: true })
         await fs.mkdir(breaker)
-        const old = new Date(Date.now() - 120_000)
-        await fs.utimes(lockDir, old, old)
-        await fs.utimes(breaker, old, old)
+        const future = new Date(Date.now() + 3_600_000)
+        await fs.utimes(lockDir, future, future)
+        await fs.utimes(breaker, future, future)
       })
 
       let hit = false
-      yield* flock.withLock(
-        Effect.sync(() => {
-          hit = true
-        }),
-        key,
-        dir,
-      )
+      const pending = yield* flock
+        .withLock(
+          Effect.sync(() => {
+            hit = true
+          }),
+          key,
+          dir,
+        )
+        .pipe(Effect.forkScoped)
+      yield* TestClock.adjust("1 second").pipe(Effect.repeat({ times: 180 }))
+      yield* Fiber.join(pending)
       expect(hit).toBe(true)
       expect(yield* Effect.promise(() => exists(breaker))).toBe(false)
       yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))

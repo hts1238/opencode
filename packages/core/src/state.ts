@@ -30,13 +30,13 @@ const CurrentBatch = Context.Reference<Set<Reload> | undefined>("@opencode/State
   defaultValue: () => undefined,
 })
 
-export function batch<A, E, R>(effect: Effect.Effect<A, E, R>) {
+export function batch<A, E, R>(effect: Effect.Effect<A, E, R>, options?: { reload?: boolean }) {
   return Effect.gen(function* () {
     const current = yield* CurrentBatch
-    if (current) return yield* effect
+    if (current && options?.reload !== false) return yield* effect
     const reloads = new Set<Reload>()
     const result = yield* effect.pipe(Effect.provideService(CurrentBatch, reloads))
-    yield* Effect.forEach(reloads, (reload) => reload(), { discard: true })
+    if (options?.reload !== false) yield* Effect.forEach(reloads, (reload) => reload(), { discard: true })
     return result
   })
 }

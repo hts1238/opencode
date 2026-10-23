@@ -114,6 +114,87 @@ async function readJson<T>(p: string): Promise<T> {
 }
 
 describe("util.flock", () => {
+  test.each([-3_600_000, 3_600_000])(
+    "does not evict a live heartbeat after a clock correction of %i ms",
+    async (offset) => {
+      await using tmp = await tmpdir()
+      const dir = path.join(tmp.path, "locks")
+      const key = "flock:clock-correction"
+      await using owner = await Flock.acquire(key, { dir, staleMs: 300 })
+      const heartbeat = path.join(lock(dir, key), "heartbeat")
+      const corrected = new Date(Date.now() + offset)
+      await fs.utimes(heartbeat, corrected, corrected)
+
+      await expect(
+        Flock.acquire(key, { dir, staleMs: 300, timeoutMs: 450, baseDelayMs: 10, maxDelayMs: 30 }).then(
+          async (lease) => {
+            await lease.release()
+          },
+        ),
+      ).rejects.toThrow("Timed out waiting for lock")
+    },
+  )
+
+  test("recovers abandoned locks and breaker claims dated in the future", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:future-orphan"
+    const lockDir = lock(dir, key)
+    const breaker = lockDir + ".breaker"
+    await fs.mkdir(lockDir, { recursive: true })
+    await fs.mkdir(breaker)
+    const future = new Date(Date.now() + 3_600_000)
+    await fs.utimes(lockDir, future, future)
+    await fs.utimes(breaker, future, future)
+
+    await using lease = await Flock.acquire(key, {
+      dir,
+      staleMs: 100,
+      timeoutMs: 1_500,
+      baseDelayMs: 10,
+      maxDelayMs: 30,
+    })
+    expect(await exists(breaker)).toBe(false)
+  })
+
+  test("cancels a waiting contender without disturbing the owner", async () => {
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:cancel"
+    await using owner = await Flock.acquire(key, { dir })
+    const before = await fs.readFile(path.join(lock(dir, key), "meta.json"), "utf8")
+    const controller = new AbortController()
+    const reason = new Error("cancel lock wait")
+    await expect(
+      Flock.acquire(key, {
+        dir,
+        signal: controller.signal,
+        onWait: () => controller.abort(reason),
+      }),
+    ).rejects.toBe(reason)
+    expect(await fs.readFile(path.join(lock(dir, key), "meta.json"), "utf8")).toBe(before)
+  })
+
+  test("does not probe owner PIDs from another Linux namespace", async () => {
+    if (process.platform !== "linux") return
+    await using tmp = await tmpdir()
+    const dir = path.join(tmp.path, "locks")
+    const key = "flock:namespace"
+    await using owner = await Flock.acquire(key, { dir, staleMs: 300 })
+    const meta = path.join(lock(dir, key), "meta.json")
+    const original = await readJson<{ token: string; pid: number; pidNamespace: string }>(meta)
+    await fs.writeFile(meta, JSON.stringify({ ...original, pid: 2_147_483_647, pidNamespace: "another-namespace" }))
+    await expect(
+      Flock.acquire(key, {
+        dir,
+        staleMs: 300,
+        timeoutMs: 450,
+        baseDelayMs: 10,
+        maxDelayMs: 30,
+      }),
+    ).rejects.toThrow("Timed out waiting for lock")
+  })
+
   test("enforces mutual exclusion under process contention", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")

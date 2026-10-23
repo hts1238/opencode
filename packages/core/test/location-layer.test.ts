@@ -47,10 +47,12 @@ describe("LocationServiceMap", () => {
         (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
       )
       const released: string[] = []
+      const started: string[] = []
       const watcher = Layer.effect(
         Watcher.Service,
         Effect.gen(function* () {
           const location = yield* Location.Service
+          started.push(location.directory)
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
               released.push(location.directory)
@@ -61,16 +63,33 @@ describe("LocationServiceMap", () => {
       )
       yield* Effect.gen(function* () {
         const locations = yield* LocationServiceMap.Service
+        const events = yield* EventV2.Service
+        const updates: string[] = []
+        const unsubscribe = yield* events.listen((event) =>
+          Effect.sync(() => {
+            if (event.type === Reference.Event.Updated.type || event.type === Catalog.Event.Updated.type)
+              updates.push(event.type)
+          }),
+        )
+        yield* Effect.addFinalizer(() => unsubscribe)
         const ref = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
         const active = yield* Scope.make()
+        yield* Effect.addFinalizer((exit) => Scope.close(active, exit))
         yield* locations.contextEffect(ref).pipe(Effect.provideService(Scope.Scope, active))
         yield* TestClock.adjust("11 minutes")
         expect(released).toEqual([])
+        const count = updates.length
+        expect(count).toBeGreaterThan(0)
         yield* Scope.close(active, Exit.void)
         yield* TestClock.adjust("9 minutes")
         expect(released).toEqual([])
         yield* TestClock.adjust("2 minutes")
         expect(released).toEqual([dir.path])
+        yield* TestClock.adjust("30 minutes")
+        expect(started).toEqual([dir.path])
+        expect(updates).toHaveLength(count)
+        yield* locations.contextEffect(ref).pipe(Effect.scoped)
+        expect(started).toEqual([dir.path, dir.path])
       }).pipe(Effect.provide(buildLocationServiceMap([[Watcher.node, watcher]])))
     }),
   )

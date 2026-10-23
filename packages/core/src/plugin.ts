@@ -128,7 +128,9 @@ const layer = Layer.effect(
     yield* Effect.addFinalizer((exit) =>
       Effect.gen(function* () {
         active.clear()
-        yield* State.batch(Scope.close(scope, exit))
+        // These registries are being destroyed. Reload events here make clients
+        // fetch their state again, recreating an otherwise idle location.
+        yield* State.batch(Scope.close(scope, exit), { reload: false })
       }),
     )
 

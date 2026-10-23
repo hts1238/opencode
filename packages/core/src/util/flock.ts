@@ -3,6 +3,7 @@ import os from "os"
 import { randomBytes, randomUUID } from "crypto"
 import { mkdir, readFile, rm, stat, utimes, writeFile } from "fs/promises"
 import { Hash } from "./hash"
+import { LockHeartbeat } from "./lock-heartbeat"
 import { Effect } from "effect"
 
 export type FlockGlobal = {
@@ -110,10 +111,6 @@ export namespace Flock {
     return performance.now()
   }
 
-  function wall() {
-    return performance.timeOrigin + mono()
-  }
-
   async function stats(file: string) {
     try {
       return await stat(file)
@@ -124,28 +121,38 @@ export namespace Flock {
     }
   }
 
-  async function stale(lockDir: string, heartbeatPath: string, metaPath: string, staleMs: number) {
-    // Stale detection allows automatic recovery after crashed owners.
-    const now = wall()
-    const heartbeat = await stats(heartbeatPath)
-    if (heartbeat) {
-      return now - heartbeat.mtimeMs > staleMs
-    }
-
-    const meta = await stats(metaPath)
-    if (meta) {
-      return now - meta.mtimeMs > staleMs
-    }
-
-    const dir = await stats(lockDir)
-    if (!dir) {
-      return false
-    }
-
-    return now - dir.mtimeMs > staleMs
+  function signature(info: NonNullable<Awaited<ReturnType<typeof stats>>>) {
+    return `${info.dev}:${info.ino}:${info.mtimeMs}:${info.ctimeMs}:${info.size}`
   }
 
-  async function tryAcquireLockDir(lockDir: string, opts: Opts): Promise<Owned | { acquired: false }> {
+  async function stale(
+    lockDir: string,
+    heartbeatPath: string,
+    metaPath: string,
+    unchanged: ReturnType<typeof LockHeartbeat.make>,
+  ) {
+    const file =
+      (await stats(heartbeatPath).then((info) => info && { path: heartbeatPath, info })) ??
+      (await stats(metaPath).then((info) => info && { path: metaPath, info })) ??
+      (await stats(lockDir).then((info) => info && { path: lockDir, info }))
+    if (!file) return false
+    // Dead local processes need no grace period, including after a clock rollback.
+    if (
+      LockHeartbeat.deadOwner(
+        await readFile(metaPath, "utf8")
+          .then(JSON.parse)
+          .catch(() => undefined),
+      )
+    )
+      return true
+    return unchanged(file.path, signature(file.info))
+  }
+
+  async function tryAcquireLockDir(
+    lockDir: string,
+    opts: Opts,
+    unchanged: ReturnType<typeof LockHeartbeat.make>,
+  ): Promise<Owned | { acquired: false }> {
     const token = randomUUID?.() ?? randomBytes(16).toString("hex")
     const metaPath = path.join(lockDir, "meta.json")
     const heartbeatPath = path.join(lockDir, "heartbeat")
@@ -157,7 +164,7 @@ export namespace Flock {
         throw err
       }
 
-      if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
+      if (!(await stale(lockDir, heartbeatPath, metaPath, unchanged))) {
         return { acquired: false }
       }
 
@@ -168,7 +175,7 @@ export namespace Flock {
         const errCode = code(claimErr)
         if (errCode === "EEXIST") {
           const breaker = await stats(breakerPath)
-          if (breaker && wall() - breaker.mtimeMs > opts.staleMs) {
+          if (breaker && unchanged(breakerPath, signature(breaker))) {
             await rm(breakerPath, { recursive: true, force: true }).catch(() => undefined)
           }
           return { acquired: false }
@@ -183,7 +190,7 @@ export namespace Flock {
 
       try {
         // Breaker ownership ensures only one contender performs stale cleanup.
-        if (!(await stale(lockDir, heartbeatPath, metaPath, opts.staleMs))) {
+        if (!(await stale(lockDir, heartbeatPath, metaPath, unchanged))) {
           return { acquired: false }
         }
 
@@ -207,6 +214,7 @@ export namespace Flock {
       token,
       pid: process.pid,
       hostname: os.hostname(),
+      pidNamespace: LockHeartbeat.pidNamespace,
       createdAt: new Date().toISOString(),
     }
 
@@ -277,6 +285,7 @@ export namespace Flock {
     opts: Opts,
   ) {
     const stop = mono() + opts.timeoutMs
+    const unchanged = LockHeartbeat.make(opts.staleMs)
     let attempt = 0
     let waited = 0
     let delay = opts.baseDelayMs
@@ -284,7 +293,7 @@ export namespace Flock {
     while (true) {
       input.signal?.throwIfAborted()
 
-      const res = await tryAcquireLockDir(lockDir, opts)
+      const res = await tryAcquireLockDir(lockDir, opts, unchanged)
       if (res.acquired) {
         return res
       }
