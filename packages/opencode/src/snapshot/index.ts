@@ -1,7 +1,7 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Duration, Effect, Layer, Schedule, Schema, Semaphore, Context } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { formatPatch, structuredPatch } from "diff"
+import { formatPatch, parsePatch } from "diff"
 import path from "path"
 import { AppProcess } from "@opencode-ai/core/process"
 import { InstanceState } from "@/effect/instance-state"
@@ -569,161 +569,44 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 deletions: number
               }
 
-              type Ref = {
-                file: string
-                side: "before" | "after"
-                ref: string
-              }
-
-              const show = Effect.fnUntraced(function* (row: Row) {
-                if (row.binary) return ["", ""]
-                if (row.status === "added") {
-                  return [
-                    "",
-                    yield* git([...cfg, ...args(["show", `${to}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                  ]
-                }
-                if (row.status === "deleted") {
-                  return [
-                    yield* git([...cfg, ...args(["show", `${from}:${row.file}`])]).pipe(
-                      Effect.map((item) => item.text),
-                    ),
-                    "",
-                  ]
-                }
-                return yield* Effect.all(
-                  [
-                    git([...cfg, ...args(["show", `${from}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                    git([...cfg, ...args(["show", `${to}:${row.file}`])]).pipe(Effect.map((item) => item.text)),
-                  ],
-                  { concurrency: 2 },
-                )
-              })
-
-              const load = Effect.fnUntraced(
-                function* (rows: Row[]) {
-                  const refs = rows.flatMap((row) => {
-                    if (row.binary) return []
-                    if (row.status === "added")
-                      return [{ file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref]
-                    if (row.status === "deleted") {
-                      return [{ file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref]
-                    }
-                    return [
-                      { file: row.file, side: "before", ref: `${from}:${row.file}` } satisfies Ref,
-                      { file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref,
-                    ]
-                  })
-                  if (!refs.length) return new Map<string, { before: string; after: string }>()
-
-                  const batch = yield* appProcess.run(
-                    ChildProcess.make("git", [...cfg, ...args(["cat-file", "--batch"])], {
-                      cwd: state.directory,
-                      extendEnv: true,
-                    }),
-                    { stdin: refs.map((item) => item.ref).join("\n") + "\n" },
-                  )
-                  if (batch.exitCode !== 0) {
-                    yield* Effect.logInfo(
-                      "git cat-file --batch failed during snapshot diff, falling back to per-file git show",
-                      {
-                        stderr: batch.stderr.toString("utf8"),
-                        refs: refs.length,
-                      },
-                    )
-                    return
-                  }
-                  const out = batch.stdout
-
-                  const fail = (msg: string, extra?: Record<string, string>) => {
-                    return undefined
-                  }
-
-                  const map = new Map<string, { before: string; after: string }>()
-                  const dec = new TextDecoder()
-                  let i = 0
-                  for (const ref of refs) {
-                    let end = i
-                    while (end < out.length && out[end] !== 10) end += 1
-                    if (end >= out.length) {
-                      return fail(
-                        "git cat-file --batch returned a truncated header during snapshot diff, falling back to per-file git show",
-                      )
-                    }
-
-                    const head = dec.decode(out.slice(i, end))
-                    i = end + 1
-                    const hit = map.get(ref.file) ?? { before: "", after: "" }
-                    if (head.endsWith(" missing")) {
-                      map.set(ref.file, hit)
-                      continue
-                    }
-
-                    const match = head.match(/^[0-9a-f]+ blob (\d+)$/)
-                    if (!match) {
-                      return fail(
-                        "git cat-file --batch returned an unexpected header during snapshot diff, falling back to per-file git show",
-                        { head },
-                      )
-                    }
-
-                    const size = Number(match[1])
-                    if (!Number.isInteger(size) || size < 0 || i + size >= out.length || out[i + size] !== 10) {
-                      return fail(
-                        "git cat-file --batch returned truncated content during snapshot diff, falling back to per-file git show",
-                        { head },
-                      )
-                    }
-
-                    const text = dec.decode(out.slice(i, i + size))
-                    if (ref.side === "before") hit.before = text
-                    if (ref.side === "after") hit.after = text
-                    map.set(ref.file, hit)
-                    i += size + 1
-                  }
-
-                  if (i !== out.length) {
-                    return fail(
-                      "git cat-file --batch returned trailing data during snapshot diff, falling back to per-file git show",
-                    )
-                  }
-
-                  return map
-                },
-                Effect.scoped,
-                Effect.catch(() =>
-                  Effect.succeed<Map<string, { before: string; after: string }> | undefined>(undefined),
-                ),
-              )
-
               const result: FileDiff[] = []
               const status = new Map<string, "added" | "deleted" | "modified">()
 
+              const options = [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--no-color",
+                "--no-relative",
+                "--diff-algorithm=histogram",
+              ]
+
               const statuses = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", "."])],
+                [...quote, ...args([...options, "--name-status", "-z", from, to, "--", "."])],
                 { cwd: state.directory },
               )
 
-              for (const line of statuses.text.trim().split("\n")) {
-                if (!line) continue
-                const [code, file] = line.split("\t")
+              const names = statuses.text.split("\0")
+              for (let i = 0; i + 1 < names.length; i += 2) {
+                const code = names[i]
+                const file = names[i + 1]
                 if (!code || !file) continue
                 status.set(file, code.startsWith("A") ? "added" : code.startsWith("D") ? "deleted" : "modified")
               }
 
-              const numstat = yield* git(
-                [...quote, ...args(["diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", "."])],
-                {
-                  cwd: state.directory,
-                },
-              )
+              const numstat = yield* git([...quote, ...args([...options, "--numstat", "-z", from, to, "--", "."])], {
+                cwd: state.directory,
+              })
 
               const rows = numstat.text
-                .trim()
-                .split("\n")
+                .split("\0")
                 .filter(Boolean)
                 .flatMap((line) => {
-                  const [adds, dels, file] = line.split("\t")
+                  const fields = line.split("\t")
+                  const adds = fields[0]
+                  const dels = fields[1]
+                  const file = fields.slice(2).join("\t")
                   if (!file) return []
                   const binary = adds === "-" && dels === "-"
                   const additions = binary ? 0 : parseInt(adds)
@@ -756,21 +639,68 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
               if (hit) return hit.map((item) => ({ ...item }))
 
               const step = 100
-              const complete = { value: statuses.code === 0 && numstat.code === 0 }
-              const patch = (file: string, before: string, after: string) =>
-                formatPatch(structuredPatch(file, file, before, after, "", "", { context: Number.MAX_SAFE_INTEGER }))
-
               for (let i = 0; i < rows.length; i += step) {
                 const run = rows.slice(i, i + step)
-                const text = yield* load(run)
-                if (!text) complete.value = false
+                // Myers diff in JavaScript can spend minutes on a large rewrite and
+                // block every request. Git computes the complete patch outside the
+                // event loop, with histogram anchors to avoid that quadratic search.
+                const patches = yield* git(
+                  [
+                    ...quote,
+                    ...args([
+                      ...options,
+                      "--patch",
+                      "--src-prefix=a/",
+                      "--dst-prefix=b/",
+                      "--unified=2147483647",
+                      from,
+                      to,
+                      "--",
+                      ...run.map((row) => `:(top,literal)${row.file}`),
+                    ]),
+                  ],
+                  { cwd: state.directory },
+                )
+                if (patches.code !== 0) {
+                  return yield* Effect.die(new Error(`Failed to get snapshot patches: ${patches.stderr}`))
+                }
+                const chunks = new Map<string, ReturnType<typeof parsePatch>>()
+                for (const chunk of patches.text.split(/(?=^diff --git )/m)) {
+                  if (!chunk) continue
+                  yield* Effect.yieldNow
+                  const header = chunk.slice(0, chunk.indexOf("\n"))
+                  chunks.set(header, [...(chunks.get(header) ?? []), ...parsePatch(chunk)])
+                }
 
                 for (const row of run) {
-                  const hit = text?.get(row.file) ?? { before: "", after: "" }
-                  const [before, after] = row.binary ? ["", ""] : text ? [hit.before, hit.after] : yield* show(row)
+                  const parsed = chunks.get(`diff --git ${quotePath(`a/${row.file}`)} ${quotePath(`b/${row.file}`)}`)
+                  if (!parsed) return yield* Effect.die(new Error(`Missing snapshot patch for ${row.file}`))
+                  yield* Effect.yieldNow
+                  // A file type change is emitted as deletion plus addition. Keep
+                  // one applicable patch for the file, including missing newlines.
+                  const hunks = parsed?.flatMap((patch) => patch.hunks) ?? []
                   result.push({
                     file: row.file,
-                    patch: row.binary ? "" : patch(row.file, before, after),
+                    patch: row.binary
+                      ? ""
+                      : formatPatch({
+                          oldFileName: quotePath(row.file),
+                          newFileName: quotePath(row.file),
+                          oldHeader: "",
+                          newHeader: "",
+                          hunks:
+                            hunks.length <= 1
+                              ? hunks
+                              : [
+                                  {
+                                    oldStart: 1,
+                                    newStart: 1,
+                                    oldLines: hunks.reduce((sum, hunk) => sum + hunk.oldLines, 0),
+                                    newLines: hunks.reduce((sum, hunk) => sum + hunk.newLines, 0),
+                                    lines: hunks.flatMap((hunk) => hunk.lines),
+                                  },
+                                ],
+                        }),
                     additions: row.additions,
                     deletions: row.deletions,
                     status: row.status,
@@ -778,7 +708,9 @@ const layer: Layer.Layer<Service, never, FSUtil.Service | AppProcess.Service | C
                 }
               }
 
-              if (complete.value) recentDiff.value = { from, to, signature, result: new WeakRef(result) }
+              if (statuses.code === 0 && numstat.code === 0) {
+                recentDiff.value = { from, to, signature, result: new WeakRef(result) }
+              }
               return result.map((item) => ({ ...item }))
             }),
           )
@@ -831,3 +763,26 @@ export const node = LayerNode.make({
 })
 
 export * as Snapshot from "."
+
+// Match Git's C-quoted patch headers while keeping UTF-8 paths readable.
+function quotePath(file: string) {
+  if (!/["\\\x00-\x1f\x7f]/.test(file)) return file
+  return (
+    '"' +
+    file.replace(/["\\\x00-\x1f\x7f]/g, (char) => {
+      const escape = {
+        '"': '\\"',
+        "\\": "\\\\",
+        "\n": "\\n",
+        "\r": "\\r",
+        "\t": "\\t",
+        "\b": "\\b",
+        "\f": "\\f",
+        "\v": "\\v",
+        "\x07": "\\a",
+      }[char]
+      return escape ?? `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`
+    }) +
+    '"'
+  )
+}

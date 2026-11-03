@@ -1,5 +1,6 @@
 import { afterEach, expect } from "bun:test"
 import { $ } from "bun"
+import { applyPatch } from "diff"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -881,6 +882,108 @@ it.instance(
     expect(trim.deletions).toBeGreaterThan(0)
   }),
   { git: true },
+)
+
+it.instance(
+  "large snapshot rewrites keep the event loop responsive and preserve a complete applicable patch",
+  Effect.gen(function* () {
+    const tmp = yield* bootstrap()
+    const snapshot = yield* Snapshot.Service
+    const before =
+      "context before\n" + Array.from({ length: 3000 }, (_, i) => `original ${i}\n`).join("") + "context after\n"
+    const after =
+      "context before\n" + Array.from({ length: 3000 }, (_, i) => `replacement ${i}\n`).join("") + "context after\n"
+    yield* write(`${tmp.path}/rewrite.txt`, before)
+    const from = (yield* snapshot.track())!
+    yield* write(`${tmp.path}/rewrite.txt`, after)
+    const to = (yield* snapshot.track())!
+    const timing = { last: performance.now(), delay: 0 }
+    const diffs = yield* Effect.acquireUseRelease(
+      Effect.sync(() =>
+        setInterval(() => {
+          const now = performance.now()
+          timing.delay = Math.max(timing.delay, now - timing.last)
+          timing.last = now
+        }, 10),
+      ),
+      () => snapshot.diffFull(from, to),
+      (timer) =>
+        Effect.sync(() => {
+          clearInterval(timer)
+          timing.delay = Math.max(timing.delay, performance.now() - timing.last)
+        }),
+    )
+    expect(timing.delay).toBeLessThan(500)
+    expect(diffs).toHaveLength(1)
+    expect(diffs[0]).toMatchObject({ file: "rewrite.txt", additions: 3000, deletions: 3000 })
+    expect(diffs[0].patch).toContain(" context before")
+    expect(diffs[0].patch).toContain(" context after")
+    expect(applyPatch(before, diffs[0].patch!)).toBe(after)
+  }),
+  { git: true },
+)
+
+nonWindowsIt(
+  "snapshot patches preserve literal filenames, line endings, and missing final newlines",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    yield* provideInstance(dir)(
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        const names = [
+          " leading space.txt",
+          "[literal]*.txt",
+          "colon:name.txt",
+          'quote"name.txt',
+          "back\\slash.txt",
+          "tab\tname.txt",
+          "line\nname.txt",
+          "кириллица-🙂.txt",
+        ]
+        const before = "first\r\nbefore\r\nlast"
+        const after = "first\r\nafter\r\nlast"
+        yield* Effect.all(
+          names.map((name) => write(path.join(dir, name), before)),
+          { concurrency: "unbounded" },
+        )
+        const from = (yield* snapshot.track())!
+        yield* Effect.all(
+          names.map((name) => write(path.join(dir, name), after)),
+          { concurrency: "unbounded" },
+        )
+        const to = (yield* snapshot.track())!
+        const diffs = yield* snapshot.diffFull(from, to)
+        expect(diffs.map((diff) => diff.file).toSorted()).toEqual(names.toSorted())
+        for (const diff of diffs) {
+          expect(diff.status).toBe("modified")
+          expect(diff.patch).toContain("-before\r")
+          expect(diff.patch).toContain("+after\r")
+          expect(applyPatch(before, diff.patch!)).toBe(after)
+        }
+      }),
+    )
+  }),
+)
+
+nonWindowsIt(
+  "snapshot patches stay applicable when a symlink becomes a regular file",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    yield* provideInstance(dir)(
+      Effect.gen(function* () {
+        const snapshot = yield* Snapshot.Service
+        yield* Effect.promise(() => fs.symlink("old-target", path.join(dir, "change.txt")))
+        const from = (yield* snapshot.track())!
+        yield* rm(path.join(dir, "change.txt"))
+        yield* write(path.join(dir, "change.txt"), "new text\n")
+        const to = (yield* snapshot.track())!
+        const diffs = yield* snapshot.diffFull(from, to)
+        expect(diffs).toHaveLength(1)
+        expect(diffs[0]).toMatchObject({ file: "change.txt", additions: 1, deletions: 1, status: "modified" })
+        expect(applyPatch("old-target", diffs[0].patch!)).toBe("new text\n")
+      }),
+    )
+  }),
 )
 
 it.instance(
