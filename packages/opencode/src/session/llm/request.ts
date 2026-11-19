@@ -121,7 +121,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
       message: input.user,
     },
     {
-      temperature: input.model.capabilities.temperature
+      // ChatGPT/Codex rejects temperature even when the API model supports it.
+      temperature: !isOpenaiOauth && input.model.capabilities.temperature
         ? (input.agent.temperature ?? ProviderTransform.temperature(input.model))
         : undefined,
       topP: input.agent.topP ?? ProviderTransform.topP(input.model),
