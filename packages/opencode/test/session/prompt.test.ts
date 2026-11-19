@@ -909,6 +909,42 @@ it.instance("static loop consumes queued replies across turns", () =>
   }),
 )
 
+it.instance("regenerates a session title without sending transient assistant messages or synthetic input", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const { prompt, sessions, chat } = yield* boot({ title: "Previous title" })
+    const intermediate = yield* seed(chat.id, { finish: "tool-calls", text: "Intermediate commentary" })
+    yield* sessions.updateMessage({
+      ...intermediate.assistant,
+      time: { ...intermediate.assistant.time, completed: Date.now() },
+    })
+    yield* sessions.updatePart({
+      type: "text",
+      id: PartID.ascending(),
+      sessionID: chat.id,
+      messageID: intermediate.user.id,
+      synthetic: true,
+      text: "Synthetic reminder",
+    })
+    const final = yield* seed(chat.id, { finish: "stop", text: "Final answer" })
+    yield* sessions.updateMessage({ ...final.assistant, time: { ...final.assistant.time, completed: Date.now() } })
+    yield* user(chat.id, "Later question")
+    yield* llm.text("Updated title")
+
+    expect(yield* prompt.regenerateTitle(chat)).toBe("Updated title")
+    expect((yield* sessions.get(chat.id)).title).toBe("Updated title")
+    const hits = yield* llm.hits
+    expect(hits).toHaveLength(1)
+    const request = JSON.stringify(hits[0]?.body)
+    expect(request).toContain("Previous title")
+    expect(request).toContain("hello")
+    expect(request).toContain("Final answer")
+    expect(request).toContain("Later question")
+    expect(request).not.toContain("Intermediate commentary")
+    expect(request).not.toContain("Synthetic reminder")
+  }),
+)
+
 it.instance("loop continues when finish is tool-calls", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)

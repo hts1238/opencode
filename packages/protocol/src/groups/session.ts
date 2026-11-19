@@ -218,6 +218,21 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.regenerateTitle", "/api/session/:sessionID/regenerate-title", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Struct({ title: Schema.String }) }),
+        error: [SessionNotFoundError, ServiceUnavailableError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.regenerateTitle",
+            summary: "Regenerate session title",
+            description: "Generate and save a title using the current title and the conversation's final messages.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({

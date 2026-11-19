@@ -2590,6 +2590,12 @@ export type NotFoundError = {
   }
 }
 
+export type ServiceUnavailableError = {
+  _tag: "ServiceUnavailableError"
+  message: string
+  service?: string
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -2758,12 +2764,6 @@ export type ConflictError = {
   _tag: "ConflictError"
   message: string
   resource?: string
-}
-
-export type ServiceUnavailableError = {
-  _tag: "ServiceUnavailableError"
-  message: string
-  service?: string
 }
 
 export type MessageNotFoundError = {
@@ -10223,6 +10223,46 @@ export type SessionMessageResponses = {
 
 export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessageResponses]
 
+export type SessionRegenerateTitleData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/regenerate-title"
+}
+
+export type SessionRegenerateTitleErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionRegenerateTitleError = SessionRegenerateTitleErrors[keyof SessionRegenerateTitleErrors]
+
+export type SessionRegenerateTitleResponses = {
+  /**
+   * Success
+   */
+  200: {
+    title: string
+  }
+}
+
+export type SessionRegenerateTitleResponse = SessionRegenerateTitleResponses[keyof SessionRegenerateTitleResponses]
+
 export type SessionForkData = {
   body?: {
     messageID?: string
@@ -11889,6 +11929,50 @@ export type V2SessionRenameResponses = {
 }
 
 export type V2SessionRenameResponse = V2SessionRenameResponses[keyof V2SessionRenameResponses]
+
+export type V2SessionRegenerateTitleData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/api/session/{sessionID}/regenerate-title"
+}
+
+export type V2SessionRegenerateTitleErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+  /**
+   * SessionNotFoundError
+   */
+  404: SessionNotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type V2SessionRegenerateTitleError = V2SessionRegenerateTitleErrors[keyof V2SessionRegenerateTitleErrors]
+
+export type V2SessionRegenerateTitleResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: {
+      title: string
+    }
+  }
+}
+
+export type V2SessionRegenerateTitleResponse =
+  V2SessionRegenerateTitleResponses[keyof V2SessionRegenerateTitleResponses]
 
 export type V2SessionPromptData = {
   body: {

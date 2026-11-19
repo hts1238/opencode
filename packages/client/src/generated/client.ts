@@ -17,6 +17,8 @@ import type {
   SessionsSwitchModelOutput,
   SessionsRenameInput,
   SessionsRenameOutput,
+  SessionsRegenerateTitleInput,
+  SessionsRegenerateTitleOutput,
   SessionsPromptInput,
   SessionsPromptOutput,
   SessionsCompactInput,
@@ -381,6 +383,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      regenerateTitle: (input: SessionsRegenerateTitleInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionsRegenerateTitleOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/regenerate-title`,
+            successStatus: 200,
+            declaredStatuses: [404, 503, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       prompt: (input: SessionsPromptInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionsPromptOutput }>(
           {

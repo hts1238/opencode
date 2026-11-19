@@ -818,6 +818,8 @@ export const dict = {
 
   "session.header.search.placeholder": "Поиск {{project}}",
   "session.header.searchFiles": "Поиск файлов",
+  "session.title.regenerate": "Сгенерировать заголовок заново",
+  "session.title.regenerate.failed": "Не удалось сгенерировать заголовок заново",
   "session.header.openIn": "Открыть в",
   "session.header.open.action": "Открыть {{app}}",
   "session.header.open.ariaLabel": "Открыть в {{app}}",

@@ -153,6 +153,27 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.regenerateTitle",
+        Effect.fn(function* (ctx) {
+          const title = yield* session
+            .regenerateTitle(ctx.params.sessionID)
+            .pipe(
+              Effect.catchTag(
+                "Session.NotFoundError",
+                (error) =>
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+              ),
+            )
+          if (title === undefined) {
+            return yield* new ServiceUnavailableError({ message: "Could not generate a session title" })
+          }
+          return { data: { title } }
+        }),
+      )
+      .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
           return {

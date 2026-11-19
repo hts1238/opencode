@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, ne, or } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, inArray, ne, or } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { MessageDecodeError } from "./error"
@@ -113,6 +113,21 @@ export const firstUserMessage = Effect.fn("SessionHistory.firstUserMessage")(fun
   if (!row) return undefined
   const message = yield* decodeMessageRow(row).pipe(Effect.catch(() => Effect.succeed(undefined)))
   return message?.type === "user" ? message : undefined
+})
+
+/** Unlike model context, a title uses the conversation from before compaction too. */
+export const forTitle = Effect.fn("SessionHistory.forTitle")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), inArray(SessionMessageTable.type, ["user", "assistant"])))
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  return yield* Effect.forEach(rows, decodeMessageRow)
 })
 
 export * as SessionHistory from "./history"

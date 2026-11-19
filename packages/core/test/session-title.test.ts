@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { LLMClient, LLMEvent, Model, type LLMError, type LLMRequest } from "@opencode-ai/llm"
+import { LLMClient, LLMEvent, Message, Model, type LLMError, type LLMRequest } from "@opencode-ai/llm"
 import { OpenAIChat } from "@opencode-ai/llm/protocols"
 import { AgentV2 } from "@opencode-ai/core/agent"
 import { Database } from "@opencode-ai/core/database/database"
@@ -7,8 +7,10 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNodePlatform } from "@opencode-ai/core/effect/app-node-platform"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { EventV2 } from "@opencode-ai/core/event"
+import { ModelV2 } from "@opencode-ai/core/model"
 import { Project } from "@opencode-ai/core/project"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionEvent } from "@opencode-ai/core/session/event"
@@ -16,10 +18,10 @@ import { SessionMessage } from "@opencode-ai/core/session/message"
 import { Prompt } from "@opencode-ai/core/session/prompt"
 import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionRunnerModel } from "@opencode-ai/core/session/runner/model"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionStore } from "@opencode-ai/core/session/store"
 import { SessionTitle } from "@opencode-ai/core/session/title"
-import { DateTime, Deferred, Effect, Fiber, Layer, Stream } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 const requests: LLMRequest[] = []
@@ -120,6 +122,81 @@ it.effect("generates a title from the first user message", () =>
     expect(JSON.stringify(requests[0]?.messages)).toContain("Help me debug the failing build")
     const store = yield* SessionStore.Service
     expect((yield* store.get(sessionID))?.title).toBe("Generated Title")
+  }),
+)
+
+it.effect("regenerates a named session from the final conversation, including messages before compaction", () =>
+  Effect.gen(function* () {
+    requests.length = 0
+    titleStream = successfulTitle
+    yield* enableTitleAgent
+    const sessionID = SessionV2.ID.make("ses_title_regenerate")
+    yield* insertSession(sessionID)
+    const events = yield* EventV2.Service
+    const timestamp = DateTime.makeUnsafe(0)
+    yield* events.publish(SessionEvent.Renamed, { sessionID, timestamp, title: "Existing title" })
+    yield* prompt(sessionID, "Review the build")
+    yield* prompt(sessionID, "Focus on the warnings")
+    const { db } = yield* Database.Service
+    const writeMessage = (message: SessionMessage.Message, seq: number) => {
+      const { id: _, type, ...data } = Schema.encodeSync(SessionMessage.Message)(message)
+      return db
+        .insert(SessionMessageTable)
+        .values({ id: message.id, type, data, seq, session_id: sessionID })
+        .run()
+        .pipe(Effect.orDie)
+    }
+    const writeAssistant = (text: string, seq: number, finish?: string) =>
+      writeMessage(
+        SessionMessage.Assistant.make({
+          id: SessionMessage.ID.create(),
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make(model.id), providerID: ProviderV2.ID.make(model.provider) },
+          content: [
+            { type: "reasoning", id: "reasoning", text: "Private reasoning" },
+            { type: "text", id: "text", text },
+          ],
+          time: { created: timestamp, completed: finish ? timestamp : undefined },
+          finish,
+        }),
+        seq,
+      )
+    yield* writeAssistant("Progress update", 20, "tool-calls")
+    yield* writeAssistant("<think>More reasoning</think> Found three warnings", 21, "stop")
+    yield* writeMessage(
+      SessionMessage.Compaction.make({
+        id: SessionMessage.ID.create(),
+        type: "compaction",
+        reason: "auto",
+        summary: "Internal summary",
+        recent: "Internal context",
+        time: { created: timestamp },
+      }),
+      22,
+    )
+    yield* writeAssistant("An unfinished response", 23)
+
+    const titles = yield* SessionTitle.Service
+    const store = yield* SessionStore.Service
+    const session = yield* store.get(sessionID)
+    if (!session) throw new Error("Missing test session")
+    expect(yield* titles.regenerate(session)).toBe("Generated Title")
+    expect((yield* store.get(sessionID))?.title).toBe("Generated Title")
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.tools).toEqual([])
+    expect(requests[0]?.messages).toEqual([
+      Message.user(
+        JSON.stringify({
+          currentTitle: "Existing title",
+          messages: [
+            { role: "user", text: "Review the build" },
+            { role: "user", text: "Focus on the warnings" },
+            { role: "assistant", text: "Found three warnings" },
+          ],
+        }),
+      ),
+    ])
   }),
 )
 

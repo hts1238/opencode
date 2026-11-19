@@ -36,7 +36,7 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { PermissionNotFoundError, ServiceUnavailableError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -422,6 +422,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handleRaw("create", createRaw)
       .handle("remove", remove)
       .handle("update", update)
+      .handle("regenerateTitle", ({ params }) =>
+        Effect.gen(function* () {
+          const current = yield* requireSession(params.sessionID)
+          const title = yield* SessionError.mapStorageNotFound(promptSvc.regenerateTitle(current))
+          if (title === undefined) {
+            return yield* new ServiceUnavailableError({ message: "Could not generate a session title" })
+          }
+          return { title }
+        }),
+      )
       .handleRaw("fork", forkRaw)
       .handle("abort", abort)
       .handle("init", init)

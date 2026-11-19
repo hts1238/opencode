@@ -45,6 +45,7 @@ import { InlineInput } from "@opencode-ai/ui/inline-input"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { SessionRetry } from "@opencode-ai/session-ui/session-retry"
 import { isScrollKeyTarget, scrollKey, scrollKeyOwner, ScrollView } from "@opencode-ai/ui/scroll-view"
+import { Spinner } from "@opencode-ai/ui/spinner"
 import { StickyAccordionHeader } from "@opencode-ai/ui/sticky-accordion-header"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { TextReveal } from "@opencode-ai/ui/text-reveal"
@@ -324,8 +325,10 @@ export function MessageTimeline(props: {
   })
   const childTitle = createMemo(() => {
     if (!parentID()) return titleLabel() ?? ""
+    const label = titleLabel()
+    if (label && label === titleValue() && !/\s+\(@[^)]+ subagent\)$/.test(label)) return label
     if (childTaskDescription()) return childTaskDescription()
-    const value = titleLabel()?.replace(/\s+\(@[^)]+ subagent\)$/, "")
+    const value = label?.replace(/\s+\(@[^)]+ subagent\)$/, "")
     if (value) return value
     return language.t("command.session.new")
   })
@@ -688,6 +691,30 @@ export function MessageTimeline(props: {
     },
   }))
 
+  const regenerateTitleMutation = useMutation(() => ({
+    mutationFn: async (input: { id: string; key: string; title: string }) => {
+      const { client, protocol } = sdk()
+      const params = { sessionID: input.id }
+      if ((await protocol) === "v1") {
+        return (await client.session.regenerateTitle(params, { throwOnError: true })).data
+      }
+      return (await client.v2.session.regenerateTitle(params, { throwOnError: true })).data.data
+    },
+    onSuccess: (result, input) => {
+      if (sessionKey() !== input.key) return
+      const session = sync().session.get(input.id)
+      if (session && session.title === input.title) sync().session.remember({ ...session, title: result.title })
+    },
+    onError: () => showToast({ variant: "error", title: language.t("session.title.regenerate.failed") }),
+  }))
+
+  const regenerateTitle = () => {
+    const id = sessionID()
+    const title = titleValue()
+    if (!id || title === undefined || regenerateTitleMutation.isPending || titleMutation.isPending) return
+    regenerateTitleMutation.mutate({ id, key: sessionKey(), title })
+  }
+
   const shareSession = () => {
     const id = sessionID()
     if (!id || shareMutation.isPending) return
@@ -758,7 +785,7 @@ export function MessageTimeline(props: {
   )
 
   const openTitleEditor = () => {
-    if (!sessionID() || parentID()) return
+    if (!sessionID() || parentID() || regenerateTitleMutation.isPending) return
     setTitle({ editing: true, draft: titleLabel() ?? "" })
     requestAnimationFrame(() => {
       if (!titleRef) return
@@ -1633,18 +1660,39 @@ export function MessageTimeline(props: {
                     <Show
                       when={title.editing}
                       fallback={
-                        <h1
-                          data-slot="session-title-child"
-                          classList={{
-                            "truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base": true,
-                            "w-fit rounded-[6px] px-2 py-1 hover:bg-v2-overlay-simple-overlay-hover":
-                              settings.general.newLayoutDesigns(),
-                            "grow-1 min-w-0": !settings.general.newLayoutDesigns(),
-                          }}
-                          onClick={openTitleEditor}
-                        >
-                          {childTitle()}
-                        </h1>
+                        <div class="group/session-title flex min-w-0 items-center gap-1">
+                          <h1
+                            data-slot="session-title-child"
+                            dir="auto"
+                            classList={{
+                              "min-w-0 truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base": true,
+                              "w-fit rounded-[6px] px-2 py-1 hover:bg-v2-overlay-simple-overlay-hover":
+                                settings.general.newLayoutDesigns(),
+                            }}
+                            onClick={openTitleEditor}
+                          >
+                            {childTitle()}
+                          </h1>
+                          <Show when={titleValue() && props.userMessages.length > 0}>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="small"
+                              class="size-6 shrink-0 p-0 rounded-md [@media(hover:hover)]:opacity-0 group-hover/session-title:opacity-100 focus-visible:opacity-100 aria-busy:opacity-100"
+                              aria-label={language.t("session.title.regenerate")}
+                              aria-busy={regenerateTitleMutation.isPending}
+                              aria-disabled={regenerateTitleMutation.isPending}
+                              onClick={regenerateTitle}
+                            >
+                              <Show
+                                when={regenerateTitleMutation.isPending}
+                                fallback={<Icon name="refresh" size="small" />}
+                              >
+                                <Spinner class="size-3.5" />
+                              </Show>
+                            </Button>
+                          </Show>
+                        </div>
                       }
                     >
                       <InlineInput

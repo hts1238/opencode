@@ -20,7 +20,7 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, PermissionNotFoundError, ServiceUnavailableError, SessionBusyError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -87,6 +87,7 @@ export const SessionPaths = {
   create: root,
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
+  regenerateTitle: `${root}/:sessionID/regenerate-title`,
   fork: `${root}/:sessionID/fork`,
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
@@ -235,6 +236,18 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.update",
             summary: "Update session",
             description: "Update properties of an existing session, such as title or other metadata.",
+          }),
+        ),
+        HttpApiEndpoint.post("regenerateTitle", SessionPaths.regenerateTitle, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: Schema.Struct({ title: Schema.String }),
+          error: [ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.regenerateTitle",
+            summary: "Regenerate session title",
+            description: "Generate and save a title using the current title and the conversation's final messages.",
           }),
         ),
         HttpApiEndpoint.post("fork", SessionPaths.fork, {

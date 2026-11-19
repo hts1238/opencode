@@ -219,6 +219,8 @@ import type {
   SessionPromptAsyncResponses,
   SessionPromptErrors,
   SessionPromptResponses,
+  SessionRegenerateTitleErrors,
+  SessionRegenerateTitleResponses,
   SessionRevertErrors,
   SessionRevertResponses,
   SessionShareErrors,
@@ -385,6 +387,8 @@ import type {
   V2SessionQuestionRejectResponses,
   V2SessionQuestionReplyErrors,
   V2SessionQuestionReplyResponses,
+  V2SessionRegenerateTitleErrors,
+  V2SessionRegenerateTitleResponses,
   V2SessionRenameErrors,
   V2SessionRenameResponses,
   V2SessionRevertClearErrors,
@@ -4082,6 +4086,42 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Regenerate session title
+   *
+   * Generate and save a title using the current title and the conversation's final messages.
+   */
+  public regenerateTitle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionRegenerateTitleResponses,
+      SessionRegenerateTitleErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/regenerate-title",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * Fork session
    *
    * Create a new session by forking an existing session at a specific message point.
@@ -5861,6 +5901,29 @@ export class Session3 extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Regenerate session title
+   *
+   * Generate and save a title using the current title and the conversation's final messages.
+   */
+  public regenerateTitle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
+    return (options?.client ?? this.client).post<
+      V2SessionRegenerateTitleResponses,
+      V2SessionRegenerateTitleErrors,
+      ThrowOnError
+    >({
+      url: "/api/session/{sessionID}/regenerate-title",
+      ...options,
+      ...params,
     })
   }
 

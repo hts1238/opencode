@@ -55,6 +55,7 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { SessionTitle } from "@opencode-ai/core/session/title"
 import { LLMEvent } from "@opencode-ai/llm"
 
 // @ts-ignore
@@ -106,6 +107,7 @@ export interface Interface {
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
+  readonly regenerateTitle: (session: Session.Info) => Effect.Effect<string | undefined, Session.NotFound>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionPrompt") {}
@@ -190,6 +192,81 @@ const layer = Layer.effect(
       return parts
     })
 
+    const titleModel = Effect.fn("SessionPrompt.titleModel")(function* (
+      agent: Agent.Info,
+      model: SessionV1.User["model"],
+    ) {
+      return agent.model
+        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID)
+        : ((yield* provider.getSmallModel(model.providerID)) ??
+            (yield* provider.getModel(model.providerID, model.modelID)))
+    })
+
+    const requestTitle = Effect.fn("SessionPrompt.requestTitle")(function* (
+      input: Omit<LLM.StreamInput, "small" | "tools" | "retries">,
+    ) {
+      const chunks: string[] = []
+      let failed = false
+      yield* llm.stream({ ...input, small: true, tools: {}, retries: 2 }).pipe(
+        Stream.runForEach((event) => {
+          if (LLMEvent.is.providerError(event)) failed = true
+          if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
+          return Effect.void
+        }),
+      )
+      if (!failed) return SessionTitle.cleanTitle(chunks.join(""))
+    })
+
+    const regenerateTitle = Effect.fn("SessionPrompt.regenerateTitle")(function* (session: Session.Info) {
+      const history = yield* sessions.messages({ sessionID: session.id })
+      const messages: SessionTitle.TranscriptMessage[] = []
+      let user: SessionV1.User | undefined
+      for (const message of history) {
+        if (message.info.id === session.revert?.messageID) break
+        if (message.info.role === "user") {
+          const text = message.parts
+            .flatMap((part) => {
+              if (part.type === "text" && !part.synthetic && !part.ignored) return [part.text]
+              if (part.type === "subtask") return [part.prompt]
+              return []
+            })
+            .join("\n")
+          if (!text.trim()) continue
+          user = message.info
+          messages.push({ role: "user", text })
+          continue
+        }
+        if (!message.info.time.completed || message.info.error || message.info.summary) continue
+        if (message.info.finish !== "stop" && message.info.finish !== "length") continue
+        if (message.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted)) continue
+        const text = SessionTitle.visibleTitleText(
+          message.parts
+            .slice(message.parts.findLastIndex((part) => part.type === "tool") + 1)
+            .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
+            .join("\n"),
+        )
+        if (text) messages.push({ role: "assistant", text })
+      }
+      if (!user) return
+      const agent = yield* agents.get("title")
+      if (!agent) return
+      const model = yield* titleModel(agent, user.model).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!model) return
+      const title = yield* requestTitle({
+        agent,
+        user,
+        model,
+        sessionID: session.id,
+        system: [SessionTitle.regenerationInstruction],
+        messages: [{ role: "user", content: SessionTitle.regenerationInput(session.title, messages) }],
+      }).pipe(Effect.catch(() => Effect.succeed(undefined)))
+      if (!title) return
+      const current = yield* sessions.get(session.id)
+      if (current.title !== session.title || title === current.title) return current.title
+      yield* sessions.setTitle({ sessionID: session.id, title })
+      return title
+    })
+
     const title = Effect.fn("SessionPrompt.ensureTitle")(function* (input: {
       session: Session.Info
       history: SessionV1.WithParts[]
@@ -215,41 +292,24 @@ const layer = Layer.effect(
 
       const ag = yield* agents.get("title")
       if (!ag) return
-      const mdl = ag.model
-        ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-        : ((yield* provider.getSmallModel(input.providerID)) ??
-          (yield* provider.getModel(input.providerID, input.modelID)))
+      const mdl = yield* titleModel(ag, input)
       const msgs = onlySubtasks
         ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
         : yield* MessageV2.toModelMessagesEffect(context, mdl)
-      const text = yield* llm
-        .stream({
-          agent: ag,
-          user: firstInfo,
-          system: [],
-          small: true,
-          tools: {},
-          model: mdl,
-          sessionID: input.session.id,
-          retries: 2,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
-        })
-        .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((e) => e.text),
-          Stream.mkString,
-          Effect.orDie,
-        )
-      const cleaned = text
-        .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
-        .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line.length > 0)
-      if (!cleaned) return
-      const t = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned
-      yield* sessions
-        .setTitle({ sessionID: input.session.id, title: t })
-        .pipe(Effect.catchCause((cause) => Effect.logError("failed to generate title", { error: Cause.squash(cause) })))
+      const generated = yield* requestTitle({
+        agent: ag,
+        user: firstInfo,
+        system: [],
+        model: mdl,
+        sessionID: input.session.id,
+        messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
+      }).pipe(Effect.orDie)
+      if (!generated) return
+      yield* Effect.gen(function* () {
+        const current = yield* sessions.get(input.session.id)
+        if (current.title !== input.session.title) return
+        yield* sessions.setTitle({ sessionID: input.session.id, title: generated })
+      }).pipe(Effect.catchCause((cause) => Effect.logError("failed to generate title", { error: Cause.squash(cause) })))
     })
 
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
@@ -1514,6 +1574,7 @@ const layer = Layer.effect(
       shell,
       command,
       resolvePromptParts,
+      regenerateTitle,
     })
   }),
 )

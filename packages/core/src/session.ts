@@ -27,6 +27,7 @@ import { fromRow } from "./session/info"
 import { SessionRunner } from "./session/runner/index"
 import { SessionStore } from "./session/store"
 import { SessionExecution } from "./session/execution"
+import { SessionTitle } from "./session/title"
 import { makeGlobalNode } from "./effect/app-node"
 import { LocationServiceMap } from "./location-service-map"
 import { MessageDecodeError } from "./session/error"
@@ -145,6 +146,7 @@ export interface Interface {
     model: ModelV2.Ref
   }) => Effect.Effect<void, NotFoundError>
   readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
+  readonly regenerateTitle: (sessionID: SessionSchema.ID) => Effect.Effect<string | undefined, NotFoundError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -422,6 +424,13 @@ const layer = Layer.effect(
           timestamp: yield* DateTime.now,
           title: input.title,
         })
+      }),
+      regenerateTitle: Effect.fn("V2Session.regenerateTitle")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        return yield* Effect.gen(function* () {
+          const titles = yield* SessionTitle.Service
+          return yield* titles.regenerate(session)
+        }).pipe(Effect.provide(locations.get(session.location)))
       }),
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
