@@ -261,6 +261,13 @@
     opacity: 1;
     pointer-events: auto;
   }
+
+  @media (hover: none) {
+    [data-slot="text-part-copy-wrapper"][data-forkable] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
 }
 
 [data-component="compaction-part"] {

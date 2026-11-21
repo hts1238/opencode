@@ -691,6 +691,38 @@ export function MessageTimeline(props: {
     },
   }))
 
+  const forkMutation = useMutation(() => ({
+    mutationFn: async (input: { sessionID: string; responseID: string }) => {
+      const source = sdk()
+      const data = sync().data
+      const messages = ((await source.protocol) === "v1" ? data.message : data.session_message)[input.sessionID] ?? []
+      const index = messages.findIndex((message) => message.id === input.responseID)
+      if (index < 0) throw new Error(language.t("common.requestFailed"))
+
+      // The fork boundary is exclusive. Use the following message to keep the selected response.
+      return source.api.session.fork({ sessionID: input.sessionID, messageID: messages[index + 1]?.id })
+    },
+    onError: (err) => showToast({ title: language.t("common.requestFailed"), description: errorMessage(err) }),
+  }))
+
+  const forkResponse = (message: AssistantMessage) => {
+    if (forkMutation.isPending || message.sessionID !== sessionID()) return
+    const key = sessionKey()
+    forkMutation.mutate(
+      { sessionID: message.sessionID, responseID: message.id },
+      {
+        onSuccess: (forked) => {
+          if (sessionKey() !== key) return
+          navigate(
+            params.serverKey
+              ? sessionHref(requireServerKey(params.serverKey), forked.id)
+              : legacySessionHref(sdk().directory, forked.id),
+          )
+        },
+      },
+    )
+  }
+
   const regenerateTitleMutation = useMutation(() => ({
     mutationFn: async (input: { id: string; key: string; title: string }) => {
       const { client, protocol } = sdk()
@@ -1040,6 +1072,18 @@ export function MessageTimeline(props: {
       if (!item) return
       return partDefaultOpen(item, settings.general.shellToolPartsExpanded(), settings.general.editToolPartsExpanded())
     })
+    const copyPartID = createMemo(() =>
+      part()?.type === "text" ? assistantCopyPartID(row().userMessageID) : undefined,
+    )
+    const assistantFork = createMemo(() => {
+      const item = part()
+      if (item?.type !== "text" || item.id !== copyPartID()) return
+      const response = message()
+      if (response?.role !== "assistant" || typeof response.time.completed !== "number" || response.error) return
+      if (response.summary || response.finish === "tool-calls" || response.finish === "unknown") return
+      if (assistantMessagesByParent().get(row().userMessageID)?.at(-1)?.id !== response.id) return
+      return { onClick: () => forkResponse(response), disabled: forkMutation.isPending }
+    })
 
     return (
       <Show when={message()}>
@@ -1049,7 +1093,8 @@ export function MessageTimeline(props: {
               <MessagePart
                 part={part()}
                 message={message()}
-                showAssistantCopyPartID={assistantCopyPartID(row().userMessageID)}
+                showAssistantCopyPartID={copyPartID()}
+                assistantFork={assistantFork()}
                 turnDurationMs={turnDurationMs(row().userMessageID)}
                 useV2Actions={settings.general.newLayoutDesigns()}
                 defaultOpen={defaultOpen()}

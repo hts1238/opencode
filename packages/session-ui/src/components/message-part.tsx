@@ -201,18 +201,19 @@ export interface MessagePartProps {
   virtualizeDiff?: boolean
   onContentRendered?: () => void
   showAssistantCopyPartID?: string | null
+  assistantFork?: { onClick: () => void; disabled: boolean }
   turnDurationMs?: number
   useV2Actions?: boolean
 }
 
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset"
+    icon: "check" | "copy" | "fork" | "reset"
     label: JSX.Element
     useV2?: boolean
   },
 ) {
-  const icon = () => (props.icon === "copy" ? "outline-copy" : props.icon)
+  const icon = () => (props.icon === "copy" ? "outline-copy" : props.icon === "fork" ? "branch" : props.icon)
   return (
     <Show
       when={props.useV2}
@@ -1493,6 +1494,7 @@ export function Part(props: MessagePartProps) {
         virtualizeDiff={props.virtualizeDiff}
         onContentRendered={props.onContentRendered}
         showAssistantCopyPartID={props.showAssistantCopyPartID}
+        assistantFork={props.assistantFork}
         turnDurationMs={props.turnDurationMs}
         useV2Actions={props.useV2Actions}
       />
@@ -1782,7 +1784,11 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
           <PacedMarkdown text={text()} cacheKey={part().id} streaming={streaming()} />
         </div>
         <Show when={showCopy()}>
-          <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
+          <div
+            data-slot="text-part-copy-wrapper"
+            data-interrupted={interrupted() ? "" : undefined}
+            data-forkable={props.assistantFork ? "" : undefined}
+          >
             <MessageActionButton
               icon={copied() ? "check" : "copy"}
               label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
@@ -1791,6 +1797,18 @@ PART_MAPPING["text"] = function TextPartDisplay(props) {
               onClick={handleCopy}
               aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
             />
+            <Show when={props.assistantFork}>
+              {(action) => (
+                <MessageActionButton
+                  icon="fork"
+                  label={i18n.t("ui.message.forkMessage")}
+                  useV2={props.useV2Actions}
+                  disabled={action().disabled}
+                  onClick={action().onClick}
+                  aria-label={i18n.t("ui.message.forkMessage")}
+                />
+              )}
+            </Show>
             <Show when={meta()}>
               <span data-slot="text-part-meta" class="text-12-regular text-text-weak cursor-default">
                 {meta()}
